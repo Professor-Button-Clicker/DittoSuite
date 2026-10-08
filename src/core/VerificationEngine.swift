@@ -199,7 +199,7 @@ enum VerificationEngine {
 
             // Check mtime
             let currentMtime = Date(
-                timeIntervalSince1970: TimeInterval(currentStat.st_mtimespec.tv_sec)
+                timeIntervalSince1970: TimeInterval(currentStat.st_mtimespec.tv_sec) + TimeInterval(currentStat.st_mtimespec.tv_nsec) / 1_000_000_000
             )
             if currentMtime != entry.modificationTime {
                 let formatter = ISO8601DateFormatter()
