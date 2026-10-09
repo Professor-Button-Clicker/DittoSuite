@@ -1,6 +1,6 @@
 # DittoSuite
 
-A native macOS app (Swift/SwiftUI) for **targeted logical collection** of user-selected files and folders into forensic sparsebundles using Apple's `ditto` and `hdiutil`.
+An interactive macOS CLI tool for **targeted logical collection** of user-selected files and folders into forensic sparsebundles using Apple's `ditto` and `hdiutil`.
 
 > **This is a targeted logical collection tool, NOT a forensic imaging tool.**
 > Only items selected by the examiner are collected.
@@ -8,74 +8,72 @@ A native macOS app (Swift/SwiftUI) for **targeted logical collection** of user-s
 ## Requirements
 
 - macOS 14.0+ (Sonoma or later)
-- Xcode 15.0+ / Swift 5.9+
+- Bash 3.2+ (ships with macOS)
 - Full Disk Access (for collecting from protected paths)
 
-## Build
+## Install
 
 ```bash
-# Clone and build
-git clone https://github.com/YOUR_USERNAME/DittoSuite.git
+# Clone
+git clone https://github.com/Professor-Button-Clicker/DittoSuite.git
 cd DittoSuite
-swift build
+
+# Make executable
+chmod +x dittosuite.sh
 
 # Run
-swift run DittoSuite
+./dittosuite.sh
+```
 
-# Or open in Xcode
-open Package.swift
+## Usage
+
+```bash
+# Start the interactive 9-step workflow
+./dittosuite.sh
+
+# Show forensic guide and data integrity principles
+./dittosuite.sh --guide
+
+# Show version
+./dittosuite.sh --version
 ```
 
 ## Workflow
 
-DittoSuite walks the examiner through a 9-step GUI workflow:
+DittoSuite walks the examiner through a 9-step interactive CLI workflow:
 
-1. **Case Setup** -- examiner name, case/evidence ID, legal authority
-2. **Bundle Setup** -- create a new APFS sparsebundle (or reuse existing)
-3. **Source Selection** -- file/folder picker with size estimates
-4. **Pre-flight Checks** -- macOS version, FDA status, free space, binary hashes
-5. **Source Manifest** -- read-only walk with per-file SHA-256 (ground truth)
-6. **Collection** -- `ditto` copy with full invocation recording
-7. **Verification** -- independent manifest comparison (not trusting ditto's exit code)
-8. **Close-out** -- band count check, clean detach, session end
-9. **Results & Report** -- export text report, JSON report, and audit log
+1. **Case Setup** — examiner name, custodian name, case/evidence ID, optional device details and legal authority
+2. **Bundle Setup** — create a new APFS sparsebundle with optional AES-256 encryption
+3. **Source Selection** — enter paths to files/folders with size estimates
+4. **Pre-flight Checks** — macOS version, binary integrity, read access, free space, overlap detection, band count
+5. **Source Manifest** — read-only walk with per-file SHA-256 (ground truth)
+6. **Collection** — `ditto` copy with `--rsrc --extattr --acl --qtn` and scrubbed environment
+7. **Verification** — independent manifest comparison (never trusting ditto's exit code)
+8. **Close-out** — band count check, clean detach, session end
+9. **Results & Report** — summary of what was/wasn't collected, text report export
 
-## Architecture
+## Core Principle
 
-```
-src/
-  adapters/       Thin wrappers around /usr/bin/ditto and /usr/bin/hdiutil
-  core/           Hashing, manifests, verification, audit log, reports, preflight
-  ui/             SwiftUI views and workflow coordinator
-tests/
-  adapters/       Adapter unit tests
-  core/           Core service unit tests
-  integration/    End-to-end and upstream characterization tests
-  fixtures/       Synthetic test data generator
-```
+**Source data must NEVER be modified under any circumstances.** Collected data must NEVER be modified in any way. Failure is ALWAYS preferred over any data change. There is no override for this behavior.
 
 ## Forensic Design Principles
 
 - **Wrap, Don't Hide, Don't Replace**: upstream tools (`ditto`, `hdiutil`) are called via subprocess with argument arrays (never shell), and every invocation is fully recorded
-- **Independent Verification**: source and destination manifests are built by DittoSuite's own code and compared independently of `ditto`'s success reporting
-- **Tamper-Evident Audit Log**: append-only, hash-chained JSON Lines log (O_APPEND semantics) stored inside the sparsebundle
-- **No Silent Failures**: every error is logged, surfaced in the UI, and included in the report
-- **No Network Access**: zero networking imports, scrubbed environment variables, no telemetry
+- **Independent Verification**: source and destination manifests are built independently and compared — `ditto`'s exit code is never trusted as proof of integrity
+- **Tamper-Evident Audit Log**: append-only, hash-chained JSON Lines log stored inside the sparsebundle
+- **Environment Scrubbing**: `DYLD_*`, `LD_*`, and other dangerous variables are removed before calling system binaries
+- **No Silent Failures**: every error is logged with path and reason
+- **No Network Access**: zero network calls, no telemetry, no update checks
 
-## Compliance
+## Files
 
-32-item compliance matrix covering ISO 27037, NIST SP 800-86, SWGDE best practices, and FRE 901. See [`.pipeline/review.md`](.pipeline/review.md) for the full matrix and review status.
-
-## Validation Status
-
-This tool has passed automated code review but has **not been compiled, executed, or validated on macOS**. Before use in any legal proceeding:
-
-1. Compile and run the full test suite on macOS 14.0+
-2. Execute the 15 upstream characterization tests
-3. Complete the empirical validation plan
-4. Obtain independent forensic examiner sign-off
-
-**Do not use on real evidence without completing human validation.**
+```
+dittosuite.sh                   Interactive CLI tool (single file)
+docs/
+  forensic-requirements.md      32-item compliance matrix (ISO 27037, NIST, SWGDE, FRE 901)
+  validation-datasets.md        Synthetic test data specifications
+  dittosuite-mockup.html        Interactive UI mockup for cross-platform preview
+```
 
 ## Known Limitations
 
@@ -84,9 +82,17 @@ This tool has passed automated code review but has **not been compiled, executed
 3. Source file access times may change during collection (reading for hashing)
 4. `hdiutil verify` does not reliably cover writable sparsebundles
 5. Unicode filename normalization (NFC/NFD) must be empirically validated
-6. `hdiutil` is deprecated in macOS 27 (Golden Gate); still functional
 
-See [`src/core/ReportGenerator.swift`](src/core/ReportGenerator.swift) for the complete list included in every report.
+## Validation Status
+
+This tool has **not been validated on macOS**. Before use in any legal proceeding:
+
+1. Run the tool on macOS 14.0+ with Full Disk Access
+2. Test with synthetic fixtures covering edge cases (Unicode, symlinks, permissions)
+3. Complete the empirical validation plan
+4. Obtain independent forensic examiner sign-off
+
+**Do not use on real evidence without completing human validation.**
 
 ## License
 
