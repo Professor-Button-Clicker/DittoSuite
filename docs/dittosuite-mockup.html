@@ -1,0 +1,1541 @@
+<title>DittoSuite Preview</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=SF+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: macOS NavigationSplitView — fixed sidebar + scrollable detail */
+:root {
+  --bg: #f5f5f7;
+  --fg: #1d1d1f;
+  --fg-secondary: #86868b;
+  --fg-tertiary: #aeaeb2;
+  --sidebar-bg: #f0f0f2;
+  --sidebar-active: rgba(0, 122, 255, 0.12);
+  --sidebar-hover: rgba(0, 0, 0, 0.04);
+  --card-bg: #ffffff;
+  --card-border: rgba(0, 0, 0, 0.06);
+  --divider: rgba(0, 0, 0, 0.08);
+  --accent: #007aff;
+  --accent-hover: #0066d6;
+  --green: #34c759;
+  --green-bg: rgba(52, 199, 89, 0.1);
+  --red: #ff3b30;
+  --red-bg: rgba(255, 59, 48, 0.08);
+  --orange: #ff9500;
+  --orange-bg: rgba(255, 149, 0, 0.1);
+  --blue: #007aff;
+  --blue-bg: rgba(0, 122, 255, 0.08);
+  --purple: #af52de;
+  --input-bg: #ffffff;
+  --input-border: rgba(0, 0, 0, 0.15);
+  --titlebar-bg: rgba(236, 236, 238, 0.85);
+  --badge-fg: #ffffff;
+  --progress-track: rgba(0, 0, 0, 0.06);
+  --progress-fill: #007aff;
+  --toggle-bg: #e9e9eb;
+  --toggle-on: #34c759;
+  --scrollbar: rgba(0, 0, 0, 0.15);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1c1c1e;
+    --fg: #f5f5f7;
+    --fg-secondary: #98989d;
+    --fg-tertiary: #636366;
+    --sidebar-bg: #2c2c2e;
+    --sidebar-active: rgba(10, 132, 255, 0.2);
+    --sidebar-hover: rgba(255, 255, 255, 0.05);
+    --card-bg: #2c2c2e;
+    --card-border: rgba(255, 255, 255, 0.08);
+    --divider: rgba(255, 255, 255, 0.1);
+    --accent: #0a84ff;
+    --accent-hover: #409cff;
+    --green: #30d158;
+    --green-bg: rgba(48, 209, 88, 0.15);
+    --red: #ff453a;
+    --red-bg: rgba(255, 69, 58, 0.12);
+    --orange: #ff9f0a;
+    --orange-bg: rgba(255, 159, 10, 0.12);
+    --blue: #0a84ff;
+    --blue-bg: rgba(10, 132, 255, 0.12);
+    --purple: #bf5af2;
+    --input-bg: #3a3a3c;
+    --input-border: rgba(255, 255, 255, 0.12);
+    --titlebar-bg: rgba(44, 44, 46, 0.9);
+    --badge-fg: #ffffff;
+    --progress-track: rgba(255, 255, 255, 0.08);
+    --progress-fill: #0a84ff;
+    --toggle-bg: #39393d;
+    --toggle-on: #30d158;
+    --scrollbar: rgba(255, 255, 255, 0.2);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1c1c1e;
+  --fg: #f5f5f7;
+  --fg-secondary: #98989d;
+  --fg-tertiary: #636366;
+  --sidebar-bg: #2c2c2e;
+  --sidebar-active: rgba(10, 132, 255, 0.2);
+  --sidebar-hover: rgba(255, 255, 255, 0.05);
+  --card-bg: #2c2c2e;
+  --card-border: rgba(255, 255, 255, 0.08);
+  --divider: rgba(255, 255, 255, 0.1);
+  --accent: #0a84ff;
+  --accent-hover: #409cff;
+  --green: #30d158;
+  --green-bg: rgba(48, 209, 88, 0.15);
+  --red: #ff453a;
+  --red-bg: rgba(255, 69, 58, 0.12);
+  --orange: #ff9f0a;
+  --orange-bg: rgba(255, 159, 10, 0.12);
+  --blue: #0a84ff;
+  --blue-bg: rgba(10, 132, 255, 0.12);
+  --purple: #bf5af2;
+  --input-bg: #3a3a3c;
+  --input-border: rgba(255, 255, 255, 0.12);
+  --titlebar-bg: rgba(44, 44, 46, 0.9);
+  --badge-fg: #ffffff;
+  --progress-track: rgba(255, 255, 255, 0.08);
+  --progress-fill: #0a84ff;
+  --toggle-bg: #39393d;
+  --toggle-on: #30d158;
+  --scrollbar: rgba(255, 255, 255, 0.2);
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
+  overflow: hidden;
+  height: 100vh;
+}
+
+* { box-sizing: border-box; }
+
+.app-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-height: 100vh;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* Title bar */
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--titlebar-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--divider);
+  flex-shrink: 0;
+  min-height: 44px;
+}
+.traffic-lights {
+  display: flex;
+  gap: 6px;
+  margin-right: 8px;
+}
+.traffic-light {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  border: 0.5px solid rgba(0,0,0,0.12);
+}
+.tl-close { background: #ff5f57; }
+.tl-min { background: #febc2e; }
+.tl-max { background: #28c840; }
+.titlebar-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  opacity: 0.85;
+  flex: 1;
+  text-align: center;
+  margin-right: 60px;
+}
+
+/* Main layout */
+.main-area {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 220px;
+  min-width: 220px;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--divider);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sidebar-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--fg-secondary);
+  padding: 14px 16px 6px;
+}
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  margin: 1px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--fg-secondary);
+  transition: background 0.15s;
+  user-select: none;
+}
+.sidebar-item:hover { background: var(--sidebar-hover); }
+.sidebar-item.active {
+  background: var(--sidebar-active);
+  color: var(--fg);
+  font-weight: 500;
+}
+.sidebar-item.completed { color: var(--fg-secondary); }
+.sidebar-item.future { color: var(--fg-tertiary); opacity: 0.7; }
+.step-icon {
+  width: 18px; height: 18px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.step-icon svg { width: 16px; height: 16px; }
+
+/* Detail pane */
+.detail {
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px 32px;
+  min-width: 0;
+}
+.detail::-webkit-scrollbar { width: 6px; }
+.detail::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 3px; }
+.detail::-webkit-scrollbar-track { background: transparent; }
+
+.detail h1 {
+  font-size: 26px;
+  font-weight: 700;
+  margin: 0 0 6px;
+  letter-spacing: -0.3px;
+}
+.detail .subtitle {
+  color: var(--fg-secondary);
+  font-size: 13px;
+  margin-bottom: 20px;
+  max-width: 560px;
+}
+.detail hr {
+  border: none;
+  border-top: 1px solid var(--divider);
+  margin: 0 0 20px;
+}
+
+/* GroupBox */
+.group-box {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+.group-box-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--fg-secondary);
+  padding: 10px 14px 0;
+}
+.group-box-content {
+  padding: 10px 14px 14px;
+}
+
+/* Form fields */
+.field-group { margin-bottom: 12px; }
+.field-label {
+  font-size: 11px;
+  color: var(--fg-secondary);
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+.field-input {
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid var(--input-border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--fg);
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.field-input:focus { border-color: var(--accent); }
+.field-input::placeholder { color: var(--fg-tertiary); }
+select.field-input {
+  appearance: auto;
+  cursor: pointer;
+}
+textarea.field-input {
+  resize: vertical;
+  min-height: 56px;
+  line-height: 1.4;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 16px;
+  font-size: 13px; font-weight: 500;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+  user-select: none;
+}
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-secondary {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--input-border);
+}
+.btn-secondary:hover { background: var(--sidebar-hover); }
+.btn-danger {
+  background: transparent;
+  color: var(--red);
+  border: 1px solid var(--red);
+}
+.btn-danger:hover { background: var(--red-bg); }
+.btn[disabled] { opacity: 0.4; pointer-events: none; }
+.btn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 20px;
+  gap: 10px;
+}
+
+/* Segmented control */
+.segmented {
+  display: inline-flex;
+  background: var(--progress-track);
+  border-radius: 7px;
+  padding: 2px;
+  margin-bottom: 16px;
+}
+.seg-btn {
+  padding: 5px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.seg-btn.active {
+  background: var(--card-bg);
+  color: var(--fg);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+/* Check rows */
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--divider);
+}
+.check-row:last-child { border-bottom: none; }
+.check-icon { flex-shrink: 0; font-size: 14px; margin-top: 1px; }
+.check-label { font-size: 13px; font-weight: 500; }
+.check-detail { font-size: 11px; color: var(--fg-secondary); margin-top: 1px; }
+.badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+.badge-blocking { background: var(--red); color: var(--badge-fg); }
+.badge-pass { background: var(--green-bg); color: var(--green); }
+.badge-fail { background: var(--red-bg); color: var(--red); }
+.badge-warn { background: var(--orange-bg); color: var(--orange); }
+
+/* Source rows */
+.source-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--divider);
+}
+.source-row:last-child { border-bottom: none; }
+.source-icon { font-size: 18px; flex-shrink: 0; }
+.source-info { flex: 1; min-width: 0; }
+.source-path { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.source-meta { font-size: 11px; color: var(--fg-secondary); }
+.source-remove {
+  background: none; border: none;
+  color: var(--fg-tertiary); cursor: pointer;
+  font-size: 16px; padding: 2px;
+  border-radius: 50%;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+}
+.source-remove:hover { background: var(--red-bg); color: var(--red); }
+
+/* Summary row */
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 4px 0;
+}
+.summary-row .label { color: var(--fg-secondary); }
+
+/* Progress bar */
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--progress-track);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--progress-fill);
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+/* Stats row */
+.stats-row {
+  display: flex;
+  gap: 32px;
+  margin-top: 8px;
+}
+.stat-block {}
+.stat-label {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--fg-secondary);
+}
+.stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+/* Verdict banner */
+.verdict-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+}
+.verdict-icon { font-size: 42px; flex-shrink: 0; }
+.verdict-title { font-size: 18px; font-weight: 700; }
+.verdict-sub { font-size: 12px; color: var(--fg-secondary); margin-top: 2px; }
+
+/* Manifest hash rows */
+.hash-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  padding: 3px 0;
+}
+.hash-label { color: var(--fg-secondary); white-space: nowrap; }
+.hash-value {
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 10px;
+  color: var(--fg-tertiary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}
+
+/* Toggle */
+.toggle-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+.toggle {
+  width: 38px; height: 22px;
+  background: var(--toggle-bg);
+  border-radius: 11px;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+.toggle.on { background: var(--toggle-on); }
+.toggle::after {
+  content: '';
+  position: absolute;
+  width: 18px; height: 18px;
+  background: #fff;
+  border-radius: 50%;
+  top: 2px; left: 2px;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+}
+.toggle.on::after { transform: translateX(16px); }
+
+/* Location row */
+.location-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.location-path {
+  flex: 1;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Empty state */
+.empty-state {
+  text-align: center;
+  padding: 28px 16px;
+  color: var(--fg-tertiary);
+}
+.empty-icon { font-size: 36px; margin-bottom: 8px; }
+.empty-text { font-size: 13px; color: var(--fg-secondary); }
+.empty-sub { font-size: 11px; margin-top: 4px; }
+
+/* Error list */
+.error-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  padding: 3px 0;
+}
+.error-icon { color: var(--orange); font-size: 12px; flex-shrink: 0; margin-top: 1px; }
+
+/* Current op text */
+.current-op {
+  font-size: 11px;
+  color: var(--fg-secondary);
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Export section */
+.export-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Error type badges in results */
+.error-type-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+/* Info callout */
+.callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.callout-info { background: var(--blue-bg); color: var(--blue); }
+.callout-warn { background: var(--orange-bg); color: var(--orange); }
+.callout-icon { flex-shrink: 0; font-size: 14px; }
+
+/* Note text */
+.note {
+  font-size: 11px;
+  color: var(--fg-secondary);
+  font-style: italic;
+}
+
+/* Guide page */
+.guide-section {
+  margin-bottom: 24px;
+}
+.guide-section h2 {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0 0 6px;
+  letter-spacing: -0.2px;
+}
+.guide-section h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 16px 0 6px;
+}
+.guide-section p {
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 0 0 8px;
+  color: var(--fg);
+}
+.guide-section ul, .guide-section ol {
+  font-size: 13px;
+  line-height: 1.6;
+  padding-left: 20px;
+  margin: 0 0 10px;
+}
+.guide-section li { margin-bottom: 4px; }
+.principle-card {
+  border-left: 3px solid var(--red);
+  background: var(--red-bg);
+  padding: 12px 14px;
+  border-radius: 0 6px 6px 0;
+  margin-bottom: 12px;
+}
+.principle-card.warn {
+  border-left-color: var(--orange);
+  background: var(--orange-bg);
+}
+.principle-card.info {
+  border-left-color: var(--accent);
+  background: var(--blue-bg);
+}
+.principle-card.green {
+  border-left-color: var(--green);
+  background: var(--green-bg);
+}
+.principle-title {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.principle-body {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-secondary);
+}
+
+/* Guide sidebar item */
+.sidebar-divider {
+  height: 1px;
+  background: var(--divider);
+  margin: 6px 12px;
+}
+
+/* Step view hidden by default */
+.step-view { display: none; }
+.step-view.active { display: block; }
+
+/* Theme toggle — lives in sidebar footer */
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-top: 1px solid var(--divider);
+  flex-shrink: 0;
+  gap: 6px;
+}
+.version-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--fg-tertiary);
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+.theme-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--fg-secondary);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 20px;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+}
+.theme-toggle-btn:hover {
+  color: var(--fg);
+  border-color: var(--input-border);
+}
+.theme-toggle-icon { font-size: 13px; }
+
+/* Mobile: stack sidebar above detail */
+@media (max-width: 700px) {
+  .main-area { flex-direction: column; }
+  .sidebar {
+    width: 100%;
+    min-width: 0;
+    max-height: 180px;
+    border-right: none;
+    border-bottom: 1px solid var(--divider);
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    padding: 6px 8px;
+    gap: 2px;
+  }
+  .sidebar-title { display: none; }
+  .sidebar-item {
+    white-space: nowrap;
+    margin: 0;
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+  .step-icon { display: none; }
+  .detail { padding: 20px 16px; }
+  .detail h1 { font-size: 22px; }
+  .stats-row { gap: 16px; flex-wrap: wrap; }
+}
+</style>
+
+<div class="app-window">
+  <div class="titlebar">
+    <div class="traffic-lights">
+      <div class="traffic-light tl-close"></div>
+      <div class="traffic-light tl-min"></div>
+      <div class="traffic-light tl-max"></div>
+    </div>
+    <div class="titlebar-text">DittoSuite &mdash; Forensic Collection Tool</div>
+  </div>
+
+  <div class="main-area">
+    <div class="sidebar">
+      <div id="sidebar" style="flex:1;overflow-y:auto;"></div>
+      <div class="sidebar-footer">
+        <span class="version-label">v1.0.0</span>
+        <button class="theme-toggle-btn" onclick="toggleTheme()">
+          <span class="theme-toggle-icon" id="themeIcon">&#9790;</span>
+          <span id="themeLabel">Dark</span>
+        </button>
+      </div>
+    </div>
+    <div class="detail" id="detail"></div>
+  </div>
+</div>
+
+<script>
+const STEPS = [
+  { id: 'caseSetup',      name: 'Case Setup' },
+  { id: 'bundleSetup',    name: 'Bundle Setup' },
+  { id: 'sourceSelection',name: 'Source Selection' },
+  { id: 'preflight',      name: 'Pre-flight Checks' },
+  { id: 'sourceManifest', name: 'Source Manifest' },
+  { id: 'collection',     name: 'Collection' },
+  { id: 'verification',   name: 'Verification' },
+  { id: 'closeOut',       name: 'Close-out' },
+  { id: 'results',        name: 'Results & Report' }
+];
+
+let currentStep = 0;
+let completedUpTo = -1;
+let showGuide = false;
+
+const svgCheck = `<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" fill="var(--green)"/><path d="M5 8.2L7 10.2L11 6" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const svgActive = `<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" fill="var(--accent)"/></svg>`;
+const svgFuture = `<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="var(--fg-tertiary)" stroke-width="1.2"/></svg>`;
+const svgGuide = `<svg viewBox="0 0 16 16" fill="none"><rect x="3" y="2" width="10" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2"/><line x1="5.5" y1="5" x2="10.5" y2="5" stroke="currentColor" stroke-width="1"/><line x1="5.5" y1="7.5" x2="10.5" y2="7.5" stroke="currentColor" stroke-width="1"/><line x1="5.5" y1="10" x2="8.5" y2="10" stroke="currentColor" stroke-width="1"/></svg>`;
+
+function renderSidebar() {
+  const sb = document.getElementById('sidebar');
+  const guideActive = showGuide ? ' active' : '';
+  sb.innerHTML =
+    `<div class="sidebar-item${guideActive}" onclick="openGuide()" style="margin-top:8px;">
+      <span class="step-icon">${svgGuide}</span>Guide
+    </div>
+    <div class="sidebar-divider"></div>
+    <div class="sidebar-title">Workflow</div>` +
+    STEPS.map((s, i) => {
+      let cls = 'sidebar-item';
+      let icon;
+      if (showGuide) { cls += ' completed'; icon = i <= completedUpTo ? svgCheck : svgFuture; }
+      else if (i < completedUpTo + 1 && i !== currentStep) { cls += ' completed'; icon = svgCheck; }
+      else if (i === currentStep) { cls += ' active'; icon = svgActive; }
+      else { cls += ' future'; icon = svgFuture; }
+      return `<div class="${cls}" data-step="${i}" onclick="goToStep(${i})">
+        <span class="step-icon">${icon}</span>${s.name}
+      </div>`;
+    }).join('');
+}
+
+function openGuide() {
+  showGuide = true;
+  renderSidebar();
+  const d = document.getElementById('detail');
+  d.scrollTop = 0;
+  d.innerHTML = renderGuide();
+}
+
+function goToStep(i) {
+  showGuide = false;
+  currentStep = i;
+  if (i > completedUpTo + 1) completedUpTo = i - 1;
+  renderSidebar();
+  renderDetail();
+}
+
+function completeAndAdvance() {
+  if (currentStep > completedUpTo) completedUpTo = currentStep;
+  if (currentStep < STEPS.length - 1) {
+    currentStep++;
+    renderSidebar();
+    renderDetail();
+  }
+}
+
+function goBack() {
+  if (currentStep > 0) {
+    currentStep--;
+    renderSidebar();
+    renderDetail();
+  }
+}
+
+function renderDetail() {
+  const d = document.getElementById('detail');
+  d.scrollTop = 0;
+  switch (currentStep) {
+    case 0: d.innerHTML = renderCaseSetup(); break;
+    case 1: d.innerHTML = renderBundleSetup(); break;
+    case 2: d.innerHTML = renderSourceSelection(); break;
+    case 3: d.innerHTML = renderPreflight(); break;
+    case 4: d.innerHTML = renderSourceManifest(); break;
+    case 5: d.innerHTML = renderCollection(); break;
+    case 6: d.innerHTML = renderVerification(); break;
+    case 7: d.innerHTML = renderCloseOut(); break;
+    case 8: d.innerHTML = renderResults(); break;
+  }
+}
+
+function renderCaseSetup() {
+  return `
+    <h1>Case Setup</h1>
+    <p class="subtitle">Complete all required fields before proceeding. This information will be recorded in the audit log and included in the collection report.</p>
+    <hr>
+    <div class="group-box">
+      <div class="group-box-title">Examiner Information</div>
+      <div class="group-box-content">
+        <div class="field-group">
+          <div class="field-label">Examiner Name *</div>
+          <input class="field-input" value="Det. Sarah Chen" />
+        </div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">Custodian Information</div>
+      <div class="group-box-content">
+        <div class="field-group">
+          <div class="field-label">Custodian Name *</div>
+          <input class="field-input" value="John Doe" />
+        </div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">Case Information</div>
+      <div class="group-box-content">
+        <div class="field-group">
+          <div class="field-label">Case ID *</div>
+          <input class="field-input" value="2026-CF-04471" />
+        </div>
+        <div class="field-group">
+          <div class="field-label">Evidence ID *</div>
+          <input class="field-input" value="EV-2026-04471-001" />
+        </div>
+        <div class="field-group">
+          <div class="field-label">Make</div>
+          <input class="field-input" value="Apple" placeholder="e.g. Apple" />
+        </div>
+        <div class="field-group">
+          <div class="field-label">Model / A Number</div>
+          <input class="field-input" value="MacBook Pro 16-inch (A2991)" placeholder="e.g. MacBook Pro 16-inch (A2991)" />
+        </div>
+        <div class="field-group">
+          <div class="field-label">Serial Number</div>
+          <input class="field-input" value="C02ZR1ABCD" placeholder="e.g. C02ZR1ABCD" />
+        </div>
+        <div class="field-group">
+          <div class="field-label">macOS Version</div>
+          <input class="field-input" value="15.2 (Sequoia)" placeholder="e.g. 15.2 (Sequoia)" />
+        </div>
+        <div class="field-group">
+          <div class="field-label">Collection Location</div>
+          <input class="field-input" value="" placeholder="e.g. DFIR Lab, Room 204" />
+        </div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">Legal Authority</div>
+      <div class="group-box-content">
+        <p class="note" style="margin-bottom:10px;">Optional. Fill in at your discretion.</p>
+        <div class="field-group">
+          <div class="field-label">Authority Type</div>
+          <select class="field-input">
+            <option value="" selected>Select if applicable&hellip;</option>
+            <option>Search Warrant</option>
+            <option>Consent</option>
+            <option>Court Order</option>
+            <option>Policy/Administrative</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <div class="field-label">Authority Reference</div>
+          <input class="field-input" value="" placeholder="Warrant number, consent form ID, etc." />
+        </div>
+        <div class="field-group">
+          <div class="field-label">Scope Notes</div>
+          <textarea class="field-input" rows="3" placeholder="Describe the authorized scope of collection, any exclusions, or other relevant notes."></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">Time Source</div>
+      <div class="group-box-content">
+        <div class="field-group">
+          <div class="field-label">UTC Time Source</div>
+          <input class="field-input" value="System clock (NTP synchronized)" />
+        </div>
+        <p class="note">Auto-filled with system NTP status. Add notes if needed.</p>
+      </div>
+    </div>
+    <div class="btn-row">
+      <span></span>
+      <button class="btn btn-primary" onclick="completeAndAdvance()">Continue to Bundle Setup</button>
+    </div>`;
+}
+
+function renderBundleSetup() {
+  return `
+    <h1>Bundle Setup</h1>
+    <p class="subtitle">Create a new sparsebundle or reuse an existing one. The sparsebundle will contain all collected evidence.</p>
+    <hr>
+    <div class="segmented">
+      <button class="seg-btn active" onclick="this.classList.add('active');this.nextElementSibling.classList.remove('active')">Create New</button>
+      <button class="seg-btn" onclick="this.classList.add('active');this.previousElementSibling.classList.remove('active')">Reuse Existing</button>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">New Sparsebundle</div>
+      <div class="group-box-content">
+        <div class="field-group">
+          <div class="field-label">Bundle Name</div>
+          <input class="field-input" value="2026-CF-04471_EV-2026-04471-001" />
+        </div>
+        <div class="field-group">
+          <div class="field-label">Location</div>
+          <div class="location-row">
+            <span class="location-path">/Users/schen/Desktop</span>
+            <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;">Choose&hellip;</button>
+          </div>
+        </div>
+        <div class="field-group">
+          <div class="field-label">Filesystem</div>
+          <select class="field-input" style="max-width:200px;">
+            <option selected>APFS</option>
+            <option>HFS+</option>
+            <option>ExFAT</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <div class="field-label">Maximum Size</div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input class="field-input" value="100" style="max-width:100px;" />
+            <select class="field-input" style="max-width:80px;">
+              <option>MB</option>
+              <option selected>GB</option>
+              <option>TB</option>
+            </select>
+          </div>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle" onclick="this.classList.toggle('on')"></div>
+          <span>Encrypt (AES-256)</span>
+        </div>
+      </div>
+    </div>
+    <div class="callout callout-warn" style="margin-bottom:16px;">
+      <span class="callout-icon">&#9888;</span>
+      <span>Reusing a bundle requires FR-28 verification of audit log chain integrity. This check is not yet implemented. Please create a new bundle.</span>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goBack()">Back</button>
+      <button class="btn btn-primary" onclick="completeAndAdvance()">Create Bundle</button>
+    </div>`;
+}
+
+function renderSourceSelection() {
+  return `
+    <h1>Source Selection</h1>
+    <p class="subtitle">Select the files and folders to collect. Only the items you select will be collected. This is a targeted logical collection.</p>
+    <hr>
+    <div style="display:flex;gap:8px;margin-bottom:16px;">
+      <button class="btn btn-secondary">&#128196; Add Files&hellip;</button>
+      <button class="btn btn-secondary">&#128193; Add Folder&hellip;</button>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">Selected Sources (3)</div>
+      <div class="group-box-content">
+        <div class="source-row">
+          <span class="source-icon" style="color:var(--accent);">&#128193;</span>
+          <div class="source-info">
+            <div class="source-path">/Users/jdoe/Documents</div>
+            <div class="source-meta">1,247 files, 4.82 GB</div>
+          </div>
+          <button class="source-remove">&times;</button>
+        </div>
+        <div class="source-row">
+          <span class="source-icon" style="color:var(--accent);">&#128193;</span>
+          <div class="source-info">
+            <div class="source-path">/Users/jdoe/Downloads</div>
+            <div class="source-meta">389 files, 12.31 GB</div>
+          </div>
+          <button class="source-remove">&times;</button>
+        </div>
+        <div class="source-row">
+          <span class="source-icon" style="color:var(--accent);">&#128196;</span>
+          <div class="source-info">
+            <div class="source-path">/Users/jdoe/Desktop/financial_records.xlsx</div>
+            <div class="source-meta">1 file, 2.4 MB</div>
+          </div>
+          <button class="source-remove">&times;</button>
+        </div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">Summary</div>
+      <div class="group-box-content">
+        <div class="summary-row"><span class="label">Total Sources:</span><span>3</span></div>
+        <div class="summary-row"><span class="label">Estimated Files:</span><span>1,637</span></div>
+        <div class="summary-row"><span class="label">Estimated Size:</span><span>17.13 GB</span></div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goBack()">Back</button>
+      <button class="btn btn-primary" onclick="completeAndAdvance()">Continue to Pre-flight</button>
+    </div>`;
+}
+
+function renderPreflight() {
+  const checks = [
+    { name: 'macOS Version',       status: 'pass', detail: 'macOS 15.2 (Sequoia) — on validated list', blocking: true },
+    { name: 'Full Disk Access',    status: 'pass', detail: 'DittoSuite has Full Disk Access permission', blocking: true },
+    { name: 'Source Read Access',  status: 'pass', detail: 'All 3 selected sources are readable', blocking: true },
+    { name: 'Free Space',          status: 'pass', detail: '187.4 GB available, 17.13 GB estimated needed (10.9× margin)', blocking: true },
+    { name: 'Bundle Mounted',      status: 'pass', detail: '/Volumes/EV-2026-04471-001 mounted and writable', blocking: true },
+    { name: 'ditto Binary Hash',   status: 'pass', detail: 'SHA-256: a3f8c1…e9b4d2 — matches known-good hash', blocking: false },
+    { name: 'hdiutil Binary Hash', status: 'pass', detail: 'SHA-256: 7d2e91…f4a6c8 — matches known-good hash', blocking: false },
+    { name: 'Band Count',          status: 'pass', detail: 'Current: 12 bands (limit: 100,000)', blocking: false },
+    { name: 'TCC Protected Paths', status: 'warn', detail: '/Users/jdoe/Documents may contain TCC-protected items (Desktop & Documents). Access depends on FDA status.', blocking: false },
+  ];
+  const allPass = checks.every(c => c.status !== 'fail');
+  return `
+    <h1>Pre-flight Checks</h1>
+    <p class="subtitle">Verifying system readiness before collection begins.</p>
+    <hr>
+    <div class="group-box">
+      <div class="group-box-content">
+        <div class="verdict-banner">
+          <span class="verdict-icon" style="color:var(--green);">&#9989;</span>
+          <div>
+            <div class="verdict-title">Ready to Proceed</div>
+            <div class="verdict-sub">All blocking checks passed. 1 advisory warning.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">Check Results</div>
+      <div class="group-box-content">
+        ${checks.map(c => `
+          <div class="check-row">
+            <span class="check-icon" style="color:var(--${c.status === 'pass' ? 'green' : c.status === 'warn' ? 'orange' : 'red'});">
+              ${c.status === 'pass' ? '&#10004;' : c.status === 'warn' ? '&#9888;' : '&#10006;'}
+            </span>
+            <div style="flex:1;min-width:0;">
+              <div class="check-label">
+                ${c.name}
+                ${c.status === 'fail' && c.blocking ? '<span class="badge badge-blocking">BLOCKING</span>' : ''}
+                ${c.status === 'warn' ? '<span class="badge badge-warn">WARN</span>' : ''}
+              </div>
+              <div class="check-detail">${c.detail}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goBack()">Back</button>
+      <button class="btn btn-primary" onclick="completeAndAdvance()">Continue to Collection</button>
+    </div>`;
+}
+
+function renderSourceManifest() {
+  return `
+    <h1>Building Source Manifest</h1>
+    <p class="subtitle">Walking selected sources and computing SHA-256 hashes for every file. This establishes the ground truth for verification.</p>
+    <hr>
+    <div class="group-box">
+      <div class="group-box-title">Manifest Progress</div>
+      <div class="group-box-content">
+        <div class="progress-bar"><div class="progress-fill" style="width:68%;"></div></div>
+        <div class="current-op">Hashing: /Users/jdoe/Documents/Projects/Q4-Analysis/report_final_v3.docx</div>
+        <div class="stats-row">
+          <div class="stat-block">
+            <div class="stat-label">Files Processed</div>
+            <div class="stat-value">1,114</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">Elapsed Time</div>
+            <div class="stat-value">3:42</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <span></span>
+      <button class="btn btn-primary" onclick="completeAndAdvance()">Continue</button>
+    </div>`;
+}
+
+function renderCollection() {
+  return `
+    <h1>Collection in Progress</h1>
+    <p class="subtitle">Copying selected files to the sparsebundle using ditto. Each file is copied with full metadata preservation.</p>
+    <hr>
+    <div class="group-box">
+      <div class="group-box-title">Collection Progress</div>
+      <div class="group-box-content">
+        <div class="progress-bar"><div class="progress-fill" style="width:45%;"></div></div>
+        <div class="current-op">Copying: /Users/jdoe/Downloads/project-archive-2026.zip</div>
+        <div class="stats-row">
+          <div class="stat-block">
+            <div class="stat-label">Files Processed</div>
+            <div class="stat-value">738</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">Elapsed Time</div>
+            <div class="stat-value">5:18</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">Current Source</div>
+            <div class="stat-value">2 of 3</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">Errors Encountered</div>
+      <div class="group-box-content">
+        <div class="error-row">
+          <span class="error-icon">&#9888;</span>
+          <span>PERMISSION_DENIED: /Users/jdoe/Documents/.Trash/locked_file.dat</span>
+        </div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-danger">Cancel Collection</button>
+      <button class="btn btn-primary" onclick="completeAndAdvance()">Continue</button>
+    </div>`;
+}
+
+function renderVerification() {
+  return `
+    <h1>Verification Results</h1>
+    <p class="subtitle">Comparing source manifest against destination manifest for independent verification.</p>
+    <hr>
+    <div class="group-box">
+      <div class="group-box-content">
+        <div class="verdict-banner">
+          <span class="verdict-icon" style="color:var(--green);">&#128994;</span>
+          <div>
+            <div class="verdict-title">Overall Verdict: PASS</div>
+            <div class="verdict-sub">All file hashes, sizes, and counts match between source and destination.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">Comparison Summary</div>
+      <div class="group-box-content">
+        <div class="check-row">
+          <span class="check-icon" style="color:var(--green);">&#10004;</span>
+          <div style="flex:1;"><div class="check-label">File Count Match</div></div>
+          <span class="badge badge-pass">PASS</span>
+        </div>
+        <div class="check-row">
+          <span class="check-icon" style="color:var(--green);">&#10004;</span>
+          <div style="flex:1;"><div class="check-label">Total Size Match</div></div>
+          <span class="badge badge-pass">PASS</span>
+        </div>
+        <div class="check-row">
+          <span class="check-icon" style="color:var(--green);">&#10004;</span>
+          <div style="flex:1;"><div class="check-label">Missing in Destination</div></div>
+          <span style="font-size:12px;color:var(--fg-secondary);">None</span>
+        </div>
+        <div class="check-row">
+          <span class="check-icon" style="color:var(--green);">&#10004;</span>
+          <div style="flex:1;min-width:0;">
+            <div class="check-label">Source Manifest Hash</div>
+            <div class="check-detail" style="font-family:'SF Mono','Cascadia Code','Fira Code',monospace;font-size:10px;word-break:break-all;">a3f8c1b9e2d4f67a8c1b3e5d7f9a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6</div>
+          </div>
+        </div>
+        <div class="check-row">
+          <span class="check-icon" style="color:var(--green);">&#10004;</span>
+          <div style="flex:1;min-width:0;">
+            <div class="check-label">Destination Manifest Hash</div>
+            <div class="check-detail" style="font-family:'SF Mono','Cascadia Code','Fira Code',monospace;font-size:10px;word-break:break-all;">a3f8c1b9e2d4f67a8c1b3e5d7f9a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6</div>
+          </div>
+          <span class="badge badge-pass">MATCH</span>
+        </div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">hdiutil verify</div>
+      <div class="group-box-content">
+        <div class="callout callout-info">
+          <span class="callout-icon">&#8505;</span>
+          <div>
+            <div style="font-weight:600;">SKIPPED</div>
+            <div style="font-size:11px;opacity:0.8;margin-top:2px;">hdiutil verify does not reliably cover writable sparsebundles (Known Limitation #4)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">Source Changes During Collection (1)</div>
+      <div class="group-box-content">
+        <div class="callout callout-warn" style="margin-bottom:8px;">
+          <span class="callout-icon">&#9888;</span>
+          <span>These source files changed while collection was in progress.</span>
+        </div>
+        <div class="check-row">
+          <span class="check-icon" style="color:var(--orange);">&#9888;</span>
+          <div style="flex:1;min-width:0;">
+            <div class="check-label" style="font-size:12px;">/Users/jdoe/Documents/.DS_Store</div>
+            <div class="check-detail">mtime: 2026-10-08T14:22:01Z &rarr; 2026-10-08T14:25:33Z</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">Metadata Differences (Informational)</div>
+      <div class="group-box-content">
+        <p class="note" style="margin-bottom:8px;">These metadata differences do not affect the verification verdict.</p>
+        <div class="check-row">
+          <span style="font-size:11px;color:var(--fg-secondary);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Documents/Projects/.git/index [atime]</span>
+          <span class="hash-value">differs (expected on live system)</span>
+        </div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <span></span>
+      <button class="btn btn-primary" onclick="completeAndAdvance()">Continue to Close-out</button>
+    </div>`;
+}
+
+function renderCloseOut() {
+  return `
+    <h1>Close-out</h1>
+    <p class="subtitle">Checking final band count, detaching the sparsebundle, and recording the final audit log entries.</p>
+    <hr>
+    <div class="group-box">
+      <div class="group-box-title">Close-out Progress</div>
+      <div class="group-box-content">
+        <div class="progress-bar"><div class="progress-fill" style="width:100%;"></div></div>
+        <div class="current-op">Close-out complete.</div>
+        <div class="stats-row">
+          <div class="stat-block">
+            <div class="stat-label">Band Count</div>
+            <div class="stat-value">2,048</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">Elapsed Time</div>
+            <div class="stat-value">0:04</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">Detach Status</div>
+            <div class="stat-value" style="color:var(--green);">Clean</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <span></span>
+      <button class="btn btn-primary" onclick="completeAndAdvance()">Continue</button>
+    </div>`;
+}
+
+function renderResults() {
+  return `
+    <h1>Collection Results</h1>
+    <p class="subtitle">Review the collection results and export reports.</p>
+    <hr>
+    <div class="group-box">
+      <div class="group-box-content">
+        <div class="verdict-banner">
+          <span class="verdict-icon" style="color:var(--green);">&#9989;</span>
+          <div>
+            <div class="verdict-title">Collection Status: COMPLETE</div>
+            <div class="verdict-sub" style="color:var(--green);font-weight:500;">Verification: PASS</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">What Was Collected</div>
+      <div class="group-box-content">
+        <div class="source-row">
+          <span style="color:var(--green);font-size:16px;">&#10004;</span>
+          <div class="source-info">
+            <div class="source-path">/Users/jdoe/Documents</div>
+            <div class="source-meta">1,247 files</div>
+          </div>
+        </div>
+        <div class="source-row">
+          <span style="color:var(--green);font-size:16px;">&#10004;</span>
+          <div class="source-info">
+            <div class="source-path">/Users/jdoe/Downloads</div>
+            <div class="source-meta">389 files</div>
+          </div>
+        </div>
+        <div class="source-row">
+          <span style="color:var(--green);font-size:16px;">&#10004;</span>
+          <div class="source-info">
+            <div class="source-path">/Users/jdoe/Desktop/financial_records.xlsx</div>
+            <div class="source-meta">1 file</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">What Was Not Collected</div>
+      <div class="group-box-content">
+        <div style="color:var(--green);font-size:13px;padding:4px 0;">All selected sources were completely collected.</div>
+      </div>
+    </div>
+    <div class="group-box">
+      <div class="group-box-title">Per-file Errors (1)</div>
+      <div class="group-box-content">
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;">
+          <span class="error-type-badge" style="background:var(--orange-bg);color:var(--orange);">PERMISSION_DENIED</span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">/Users/jdoe/Documents/.Trash/locked_file.dat</span>
+        </div>
+      </div>
+    </div>
+    <hr>
+    <div class="group-box">
+      <div class="group-box-title">Export Reports</div>
+      <div class="group-box-content">
+        <p class="note" style="margin-bottom:10px;">Export the collection report and audit log for your records.</p>
+        <div class="export-buttons">
+          <button class="btn btn-primary">Export Text Report</button>
+          <button class="btn btn-secondary">Export JSON Report</button>
+          <button class="btn btn-secondary">Export Audit Log</button>
+        </div>
+      </div>
+    </div>
+    <div class="callout callout-info" style="margin-top:12px;">
+      <span class="callout-icon">&#8505;</span>
+      <span>This is a <strong>targeted logical collection</strong>, not a forensic image. Only items selected by the examiner were collected. The report includes a full audit trail with hash-chained entries.</span>
+    </div>`;
+}
+
+function renderGuide() {
+  return `
+    <h1>Guide</h1>
+    <p class="subtitle">Forensic principles, data integrity guarantees, and step-by-step instructions for using DittoSuite.</p>
+    <hr>
+
+    <div class="guide-section">
+      <h2>Core Principle: Data Integrity Above All</h2>
+      <div class="principle-card">
+        <div class="principle-title">Source Data Must Never Be Modified</div>
+        <div class="principle-body">
+          Under no circumstances may DittoSuite modify, alter, write to, or change any data on the source device. This is an absolute rule with no exceptions. The tool performs <strong>read-only</strong> operations against source paths at every stage &mdash; manifest building, hashing, and collection.
+        </div>
+      </div>
+      <div class="principle-card">
+        <div class="principle-title">Collected Data Must Never Be Modified</div>
+        <div class="principle-body">
+          Data collected from the source and written into the sparsebundle must not be altered, rewritten, filtered, or transformed in any way. What is copied is an exact, byte-for-byte duplicate of the original. DittoSuite never processes, cleans, converts, or normalizes collected data.
+        </div>
+      </div>
+      <div class="principle-card" style="border-left-color:var(--red);">
+        <div class="principle-title">Failure Is Preferred Over Any Data Change</div>
+        <div class="principle-body">
+          If a file cannot be collected without modifying it &mdash; or if any operation would require writing to the source &mdash; DittoSuite will <strong>fail the operation</strong> and report it as not collected. A failed result with an accurate audit trail is always preferable to a successful result that altered any data whatsoever. There is no override for this behavior.
+        </div>
+      </div>
+    </div>
+
+    <div class="guide-section">
+      <h2>Forensic Design Principles</h2>
+      <div class="principle-card info">
+        <div class="principle-title">Wrap, Don't Hide, Don't Replace</div>
+        <div class="principle-body">
+          DittoSuite wraps Apple's system binaries (<code>/usr/bin/ditto</code>, <code>/usr/bin/hdiutil</code>) via subprocess calls with argument arrays. It never uses shell invocation, never hides upstream output, and never substitutes its own implementation for what the system tool does. Every invocation is fully recorded.
+        </div>
+      </div>
+      <div class="principle-card info">
+        <div class="principle-title">Independent Verification</div>
+        <div class="principle-body">
+          After collection, DittoSuite builds its own manifest of the destination and compares it against the source manifest. Verification is independent of <code>ditto</code>'s exit code or output &mdash; DittoSuite does not trust upstream tools to self-report accuracy. Any mismatch is a hard FAIL.
+        </div>
+      </div>
+      <div class="principle-card info">
+        <div class="principle-title">Tamper-Evident Audit Log</div>
+        <div class="principle-body">
+          Every operation is recorded in a hash-chained, append-only JSON Lines log stored inside the sparsebundle. Each entry contains the SHA-256 hash of the previous entry, forming a chain that reveals any tampering. The log uses POSIX <code>O_APPEND</code> semantics for write atomicity.
+        </div>
+      </div>
+      <div class="principle-card info">
+        <div class="principle-title">No Silent Failures</div>
+        <div class="principle-body">
+          Every error, denial, skip, or anomaly is logged with the path and reason. Nothing is silently swallowed. If a file cannot be read, it appears in the &ldquo;What Was Not Collected&rdquo; section of the report with an explanation.
+        </div>
+      </div>
+      <div class="principle-card info">
+        <div class="principle-title">No Network Access</div>
+        <div class="principle-body">
+          DittoSuite makes zero network calls. There are no telemetry hooks, update checks, analytics, or remote logging. Environment variables are scrubbed before subprocess invocation. The tool operates entirely offline.
+        </div>
+      </div>
+    </div>
+
+    <div class="guide-section">
+      <h2>What DittoSuite Is (and Is Not)</h2>
+      <div class="principle-card green">
+        <div class="principle-title">This is a targeted logical collection tool.</div>
+        <div class="principle-body">
+          DittoSuite collects only the files and folders the examiner selects. It does not image a full disk. It does not capture unallocated space, deleted files, or system-level artifacts beyond what is selected. Every report states this clearly.
+        </div>
+      </div>
+      <p>DittoSuite is <strong>not</strong>:</p>
+      <ul>
+        <li>A full-disk or physical imaging tool</li>
+        <li>A decryption or credential extraction tool</li>
+        <li>A network, cloud, or remote collection tool</li>
+        <li>An AI-powered analysis or triage tool</li>
+      </ul>
+    </div>
+
+    <div class="guide-section">
+      <h2>Workflow Steps</h2>
+      <h3>1. Case Setup</h3>
+      <p>Enter examiner name (required), custodian name (required), and case/evidence identifiers. Device details (make, model, serial, macOS version, collection location) and legal authority fields are optional &mdash; fill them in at your discretion.</p>
+
+      <h3>2. Bundle Setup</h3>
+      <p>Create a new APFS sparsebundle to hold the collected evidence. Choose a location, filesystem type, maximum size, and optional AES-256 encryption. The sparsebundle is created using <code>hdiutil</code> with the full invocation recorded.</p>
+
+      <h3>3. Source Selection</h3>
+      <p>Use the file and folder pickers to select what to collect. The selection list shows per-item size and file count estimates. Overlapping selections (a parent and its child) are detected and flagged. Only what you select is collected.</p>
+
+      <h3>4. Pre-flight Checks</h3>
+      <p>Automated checks verify: macOS version is on the validated list, Full Disk Access is granted, selected sources are readable, free space is sufficient, the bundle is mounted and writable, and system binary hashes match known-good values. Blocking failures prevent proceeding.</p>
+
+      <h3>5. Source Manifest</h3>
+      <p>A read-only walk of every selected source, recording each file's relative path, type, size, SHA-256 hash, timestamps, permissions, extended attributes, symlink targets, and hard-link relationships. This is the ground truth that verification compares against.</p>
+
+      <h3>6. Collection</h3>
+      <p>Files are copied to the mounted sparsebundle using <code>ditto</code>, one source at a time. Each invocation is recorded with arguments, exit code, duration, and hashed stdout/stderr. Cancellation is available and produces a labeled partial result.</p>
+
+      <h3>7. Verification</h3>
+      <p>An independent manifest of the destination is built and compared field-by-field against the source manifest. File count, total size, and per-file SHA-256 must all match. Any mismatch is a hard FAIL. Metadata differences (timestamps, extended attributes) are reported separately. Source files that changed during collection are flagged.</p>
+
+      <h3>8. Close-out</h3>
+      <p>Band count is checked against the threshold (100,000 limit). The sparsebundle is cleanly detached. Final audit log entries are recorded, including overall status and any audit log failures.</p>
+
+      <h3>9. Results &amp; Report</h3>
+      <p>The results screen shows what was collected, what was not collected (with reasons), and per-file errors. Export a text report, JSON report, or the raw audit log. Every report states that this is a targeted logical collection and includes the full audit trail reference.</p>
+    </div>
+
+    <div class="guide-section">
+      <h2>Known Limitations</h2>
+      <ol>
+        <li><code>ditto</code> does not preserve directory hard links</li>
+        <li>Extended attribute preservation may be incomplete for system-protected xattrs</li>
+        <li>Source file access times may change during collection (reading for hashing)</li>
+        <li><code>hdiutil verify</code> does not reliably cover writable sparsebundles</li>
+        <li>Unicode filename normalization (NFC/NFD) must be empirically validated</li>
+        <li><code>hdiutil</code> is deprecated in macOS 27 (Golden Gate); still functional</li>
+      </ol>
+      <p>Every report includes the complete list of known limitations.</p>
+    </div>
+
+    <div class="guide-section">
+      <h2>Compliance</h2>
+      <p>DittoSuite's 32-item compliance matrix maps requirements to ISO 27037, NIST SP 800-86, SWGDE best practices, and FRE 901. The tool has passed automated code review but has <strong>not been compiled, executed, or validated on macOS</strong>. Independent human validation is required before use on real evidence.</p>
+    </div>`;
+}
+
+let isDark = false;
+try { isDark = localStorage.getItem('ds-theme') === 'dark'; } catch(e) {}
+if (isDark) applyTheme('dark');
+
+function toggleTheme() {
+  isDark = !isDark;
+  applyTheme(isDark ? 'dark' : 'light');
+  try { localStorage.setItem('ds-theme', isDark ? 'dark' : 'light'); } catch(e) {}
+}
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  const icon = document.getElementById('themeIcon');
+  const label = document.getElementById('themeLabel');
+  if (t === 'dark') {
+    icon.innerHTML = '&#9788;';
+    label.textContent = 'Light';
+  } else {
+    icon.innerHTML = '&#9790;';
+    label.textContent = 'Dark';
+  }
+}
+
+renderSidebar();
+renderDetail();
+</script>
