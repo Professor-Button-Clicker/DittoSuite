@@ -1,7 +1,6 @@
 <title>DittoSuite Preview</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=SF+Mono:wght@400;500&display=swap">
 <style>
-/* Layout: macOS NavigationSplitView — fixed sidebar + scrollable detail */
 :root {
   --bg: #f5f5f7;
   --fg: #1d1d1f;
@@ -126,7 +125,6 @@ body {
   overflow: hidden;
 }
 
-/* Title bar */
 .titlebar {
   display: flex;
   align-items: center;
@@ -139,16 +137,8 @@ body {
   flex-shrink: 0;
   min-height: 44px;
 }
-.traffic-lights {
-  display: flex;
-  gap: 6px;
-  margin-right: 8px;
-}
-.traffic-light {
-  width: 12px; height: 12px;
-  border-radius: 50%;
-  border: 0.5px solid rgba(0,0,0,0.12);
-}
+.traffic-lights { display: flex; gap: 6px; margin-right: 8px; }
+.traffic-light { width: 12px; height: 12px; border-radius: 50%; border: 0.5px solid rgba(0,0,0,0.12); }
 .tl-close { background: #ff5f57; }
 .tl-min { background: #febc2e; }
 .tl-max { background: #28c840; }
@@ -162,14 +152,8 @@ body {
   margin-right: 60px;
 }
 
-/* Main layout */
-.main-area {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-}
+.main-area { display: flex; flex: 1; min-height: 0; }
 
-/* Sidebar */
 .sidebar {
   width: 220px;
   min-width: 220px;
@@ -216,7 +200,6 @@ body {
 }
 .step-icon svg { width: 16px; height: 16px; }
 
-/* Detail pane */
 .detail {
   flex: 1;
   overflow-y: auto;
@@ -245,7 +228,6 @@ body {
   margin: 0 0 20px;
 }
 
-/* GroupBox */
 .group-box {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
@@ -261,11 +243,8 @@ body {
   color: var(--fg-secondary);
   padding: 10px 14px 0;
 }
-.group-box-content {
-  padding: 10px 14px 14px;
-}
+.group-box-content { padding: 10px 14px 14px; }
 
-/* Form fields */
 .field-group { margin-bottom: 12px; }
 .field-label {
   font-size: 11px;
@@ -287,17 +266,9 @@ body {
 }
 .field-input:focus { border-color: var(--accent); }
 .field-input::placeholder { color: var(--fg-tertiary); }
-select.field-input {
-  appearance: auto;
-  cursor: pointer;
-}
-textarea.field-input {
-  resize: vertical;
-  min-height: 56px;
-  line-height: 1.4;
-}
+select.field-input { appearance: auto; cursor: pointer; }
+textarea.field-input { resize: vertical; min-height: 56px; line-height: 1.4; }
 
-/* Buttons */
 .btn {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 6px 16px;
@@ -309,10 +280,7 @@ textarea.field-input {
   transition: all 0.15s;
   user-select: none;
 }
-.btn-primary {
-  background: var(--accent);
-  color: #fff;
-}
+.btn-primary { background: var(--accent); color: #fff; }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-secondary {
   background: transparent;
@@ -335,7 +303,6 @@ textarea.field-input {
   gap: 10px;
 }
 
-/* Segmented control */
 .segmented {
   display: inline-flex;
   background: var(--progress-track);
@@ -361,7 +328,6 @@ textarea.field-input {
   box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
-/* Check rows */
 .check-row {
   display: flex;
   align-items: flex-start;
@@ -370,7 +336,8 @@ textarea.field-input {
   border-bottom: 1px solid var(--divider);
 }
 .check-row:last-child { border-bottom: none; }
-.check-icon { flex-shrink: 0; font-size: 14px; margin-top: 1px; }
+.check-icon { flex-shrink: 0; margin-top: 1px; width: 16px; height: 16px; }
+.check-icon svg { width: 16px; height: 16px; display: block; }
 .check-label { font-size: 13px; font-weight: 500; }
 .check-detail { font-size: 11px; color: var(--fg-secondary); margin-top: 1px; }
 .badge {
@@ -389,7 +356,6 @@ textarea.field-input {
 .badge-fail { background: var(--red-bg); color: var(--red); }
 .badge-warn { background: var(--orange-bg); color: var(--orange); }
 
-/* Source rows */
 .source-row {
   display: flex;
   align-items: center;
@@ -398,7 +364,8 @@ textarea.field-input {
   border-bottom: 1px solid var(--divider);
 }
 .source-row:last-child { border-bottom: none; }
-.source-icon { font-size: 18px; flex-shrink: 0; }
+.source-icon { flex-shrink: 0; width: 20px; height: 20px; color: var(--accent); }
+.source-icon svg { width: 20px; height: 20px; display: block; }
 .source-info { flex: 1; min-width: 0; }
 .source-path { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .source-meta { font-size: 11px; color: var(--fg-secondary); }
@@ -412,7 +379,6 @@ textarea.field-input {
 }
 .source-remove:hover { background: var(--red-bg); color: var(--red); }
 
-/* Summary row */
 .summary-row {
   display: flex;
   justify-content: space-between;
@@ -421,7 +387,6 @@ textarea.field-input {
 }
 .summary-row .label { color: var(--fg-secondary); }
 
-/* Progress bar */
 .progress-bar {
   width: 100%;
   height: 6px;
@@ -437,13 +402,7 @@ textarea.field-input {
   transition: width 0.5s ease;
 }
 
-/* Stats row */
-.stats-row {
-  display: flex;
-  gap: 32px;
-  margin-top: 8px;
-}
-.stat-block {}
+.stats-row { display: flex; gap: 32px; margin-top: 8px; }
 .stat-label {
   font-size: 10px;
   font-weight: 500;
@@ -458,18 +417,21 @@ textarea.field-input {
   margin-top: 2px;
 }
 
-/* Verdict banner */
 .verdict-banner {
   display: flex;
   align-items: center;
   gap: 14px;
   padding: 14px;
 }
-.verdict-icon { font-size: 42px; flex-shrink: 0; }
+.verdict-icon {
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+}
+.verdict-icon svg { width: 42px; height: 42px; display: block; }
 .verdict-title { font-size: 18px; font-weight: 700; }
 .verdict-sub { font-size: 12px; color: var(--fg-secondary); margin-top: 2px; }
 
-/* Manifest hash rows */
 .hash-row {
   display: flex;
   align-items: baseline;
@@ -486,7 +448,6 @@ textarea.field-input {
   min-width: 0;
 }
 
-/* Toggle */
 .toggle-row {
   display: flex; align-items: center; gap: 8px;
   font-size: 13px;
@@ -514,12 +475,7 @@ textarea.field-input {
 }
 .toggle.on::after { transform: translateX(16px); }
 
-/* Location row */
-.location-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+.location-row { display: flex; align-items: center; gap: 8px; }
 .location-path {
   flex: 1;
   font-size: 12px;
@@ -529,17 +485,12 @@ textarea.field-input {
   white-space: nowrap;
 }
 
-/* Empty state */
 .empty-state {
   text-align: center;
   padding: 28px 16px;
   color: var(--fg-tertiary);
 }
-.empty-icon { font-size: 36px; margin-bottom: 8px; }
-.empty-text { font-size: 13px; color: var(--fg-secondary); }
-.empty-sub { font-size: 11px; margin-top: 4px; }
 
-/* Error list */
 .error-row {
   display: flex;
   align-items: flex-start;
@@ -548,9 +499,9 @@ textarea.field-input {
   color: var(--fg-secondary);
   padding: 3px 0;
 }
-.error-icon { color: var(--orange); font-size: 12px; flex-shrink: 0; margin-top: 1px; }
+.error-row .icon-inline { flex-shrink: 0; margin-top: 1px; width: 14px; height: 14px; color: var(--orange); }
+.error-row .icon-inline svg { width: 14px; height: 14px; display: block; }
 
-/* Current op text */
 .current-op {
   font-size: 11px;
   color: var(--fg-secondary);
@@ -560,14 +511,8 @@ textarea.field-input {
   text-overflow: ellipsis;
 }
 
-/* Export section */
-.export-buttons {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
+.export-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 
-/* Error type badges in results */
 .error-type-badge {
   display: inline-block;
   font-size: 9px;
@@ -578,7 +523,6 @@ textarea.field-input {
   flex-shrink: 0;
 }
 
-/* Info callout */
 .callout {
   display: flex;
   align-items: flex-start;
@@ -589,19 +533,16 @@ textarea.field-input {
 }
 .callout-info { background: var(--blue-bg); color: var(--blue); }
 .callout-warn { background: var(--orange-bg); color: var(--orange); }
-.callout-icon { flex-shrink: 0; font-size: 14px; }
+.callout-icon { flex-shrink: 0; width: 16px; height: 16px; }
+.callout-icon svg { width: 16px; height: 16px; display: block; }
 
-/* Note text */
 .note {
   font-size: 11px;
   color: var(--fg-secondary);
   font-style: italic;
 }
 
-/* Guide page */
-.guide-section {
-  margin-bottom: 24px;
-}
+.guide-section { margin-bottom: 24px; }
 .guide-section h2 {
   font-size: 17px;
   font-weight: 700;
@@ -656,18 +597,15 @@ textarea.field-input {
   color: var(--fg-secondary);
 }
 
-/* Guide sidebar item */
 .sidebar-divider {
   height: 1px;
   background: var(--divider);
   margin: 6px 12px;
 }
 
-/* Step view hidden by default */
 .step-view { display: none; }
 .step-view.active { display: block; }
 
-/* Theme toggle — lives in sidebar footer */
 .sidebar-footer {
   display: flex;
   align-items: center;
@@ -704,9 +642,18 @@ textarea.field-input {
   color: var(--fg);
   border-color: var(--input-border);
 }
-.theme-toggle-icon { font-size: 13px; }
+.theme-toggle-icon { width: 14px; height: 14px; }
+.theme-toggle-icon svg { width: 14px; height: 14px; display: block; }
 
-/* Mobile: stack sidebar above detail */
+/* Inline icon helper */
+.icon-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.icon-inline svg { display: block; }
+
 @media (max-width: 700px) {
   .main-area { flex-direction: column; }
   .sidebar {
@@ -753,7 +700,7 @@ textarea.field-input {
       <div class="sidebar-footer">
         <span class="version-label">v1.0.0</span>
         <button class="theme-toggle-btn" onclick="toggleTheme()">
-          <span class="theme-toggle-icon" id="themeIcon">&#9790;</span>
+          <span class="theme-toggle-icon" id="themeIcon"></span>
           <span id="themeLabel">Dark</span>
         </button>
       </div>
@@ -763,6 +710,46 @@ textarea.field-input {
 </div>
 
 <script>
+// ── SVG Icon Library (replaces all emojis) ──────────────────────────────
+const icons = {
+  checkCircle: (color='currentColor', size=16) =>
+    `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" fill="${color}"/><path d="M5 8.2L7 10.2L11 6" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+
+  checkCircleOutline: (color='currentColor', size=16) =>
+    `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="${color}" stroke-width="1.2"/><path d="M5.5 8L7 9.5L10.5 6" stroke="${color}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+
+  xCircle: (color='currentColor', size=16) =>
+    `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" fill="${color}"/><path d="M5.5 5.5L10.5 10.5M10.5 5.5L5.5 10.5" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg>`,
+
+  alertTriangle: (color='currentColor', size=16) =>
+    `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none"><path d="M8 2L14.5 13H1.5L8 2Z" stroke="${color}" stroke-width="1.2" stroke-linejoin="round"/><line x1="8" y1="6.5" x2="8" y2="9.5" stroke="${color}" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="11.2" r="0.6" fill="${color}"/></svg>`,
+
+  info: (color='currentColor', size=16) =>
+    `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="${color}" stroke-width="1.2"/><line x1="8" y1="7" x2="8" y2="11" stroke="${color}" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="5.2" r="0.7" fill="${color}"/></svg>`,
+
+  folder: (color='currentColor', size=20) =>
+    `<svg width="${size}" height="${size}" viewBox="0 0 20 20" fill="none"><path d="M2.5 5.5C2.5 4.4 3.4 3.5 4.5 3.5H7.5L9.5 5.5H15.5C16.6 5.5 17.5 6.4 17.5 7.5V14.5C17.5 15.6 16.6 16.5 15.5 16.5H4.5C3.4 16.5 2.5 15.6 2.5 14.5V5.5Z" stroke="${color}" stroke-width="1.3" stroke-linejoin="round"/></svg>`,
+
+  file: (color='currentColor', size=20) =>
+    `<svg width="${size}" height="${size}" viewBox="0 0 20 20" fill="none"><path d="M5.5 2.5H11.5L15.5 6.5V17.5H5.5C4.4 17.5 4.5 17.5 4.5 16.5V3.5C4.5 2.95 4.95 2.5 5.5 2.5Z" stroke="${color}" stroke-width="1.3" stroke-linejoin="round"/><path d="M11.5 2.5V6.5H15.5" stroke="${color}" stroke-width="1.3" stroke-linejoin="round"/></svg>`,
+
+  shieldCheck: (color='currentColor', size=42) =>
+    `<svg width="${size}" height="${size}" viewBox="0 0 42 42" fill="none"><path d="M21 4L6 11V20C6 29.94 12.42 39.24 21 41C29.58 39.24 36 29.94 36 20V11L21 4Z" fill="${color}" opacity="0.15" stroke="${color}" stroke-width="2" stroke-linejoin="round"/><path d="M14 21L19 26L28 17" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+
+  shieldX: (color='currentColor', size=42) =>
+    `<svg width="${size}" height="${size}" viewBox="0 0 42 42" fill="none"><path d="M21 4L6 11V20C6 29.94 12.42 39.24 21 41C29.58 39.24 36 29.94 36 20V11L21 4Z" fill="${color}" opacity="0.15" stroke="${color}" stroke-width="2" stroke-linejoin="round"/><path d="M16 16L26 26M26 16L16 26" stroke="${color}" stroke-width="2.5" stroke-linecap="round"/></svg>`,
+
+  moon: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 9.5A6 6 0 1 1 6.5 2.5A4.5 4.5 0 0 0 13.5 9.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>`,
+
+  sun: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3" stroke="currentColor" stroke-width="1.2"/><line x1="8" y1="1.5" x2="8" y2="3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="8" y1="13" x2="8" y2="14.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="1.5" y1="8" x2="3" y2="8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="13" y1="8" x2="14.5" y2="8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="3.4" y1="3.4" x2="4.5" y2="4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="11.5" y1="11.5" x2="12.6" y2="12.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="3.4" y1="12.6" x2="4.5" y2="11.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="11.5" y1="4.5" x2="12.6" y2="3.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>`,
+
+  addFile: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 1.5H9.5L13 5V14.5H4C3.17 14.5 3 14.5 3 13.5V2.5C3 1.95 3.45 1.5 4 1.5Z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><path d="M9.5 1.5V5H13" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><line x1="8" y1="8" x2="8" y2="12" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/><line x1="6" y1="10" x2="10" y2="10" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>`,
+
+  addFolder: `<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2 4.5C2 3.67 2.67 3 3.5 3H6L7.5 4.5H12.5C13.33 4.5 14 5.17 14 6V12C14 12.83 13.33 13.5 12.5 13.5H3.5C2.67 13.5 2 12.83 2 12V4.5Z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/><line x1="8" y1="7" x2="8" y2="11" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/><line x1="6" y1="9" x2="10" y2="9" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/></svg>`,
+
+  guide: `<svg viewBox="0 0 16 16" fill="none"><rect x="3" y="2" width="10" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2"/><line x1="5.5" y1="5" x2="10.5" y2="5" stroke="currentColor" stroke-width="1"/><line x1="5.5" y1="7.5" x2="10.5" y2="7.5" stroke="currentColor" stroke-width="1"/><line x1="5.5" y1="10" x2="8.5" y2="10" stroke="currentColor" stroke-width="1"/></svg>`,
+};
+
 const STEPS = [
   { id: 'caseSetup',      name: 'Case Setup' },
   { id: 'bundleSetup',    name: 'Bundle Setup' },
@@ -779,17 +766,16 @@ let currentStep = 0;
 let completedUpTo = -1;
 let showGuide = false;
 
-const svgCheck = `<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" fill="var(--green)"/><path d="M5 8.2L7 10.2L11 6" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const svgCheck = icons.checkCircle('var(--green)');
 const svgActive = `<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" fill="var(--accent)"/></svg>`;
 const svgFuture = `<svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="var(--fg-tertiary)" stroke-width="1.2"/></svg>`;
-const svgGuide = `<svg viewBox="0 0 16 16" fill="none"><rect x="3" y="2" width="10" height="12" rx="1.5" stroke="currentColor" stroke-width="1.2"/><line x1="5.5" y1="5" x2="10.5" y2="5" stroke="currentColor" stroke-width="1"/><line x1="5.5" y1="7.5" x2="10.5" y2="7.5" stroke="currentColor" stroke-width="1"/><line x1="5.5" y1="10" x2="8.5" y2="10" stroke="currentColor" stroke-width="1"/></svg>`;
 
 function renderSidebar() {
   const sb = document.getElementById('sidebar');
   const guideActive = showGuide ? ' active' : '';
   sb.innerHTML =
     `<div class="sidebar-item${guideActive}" onclick="openGuide()" style="margin-top:8px;">
-      <span class="step-icon">${svgGuide}</span>Guide
+      <span class="step-icon">${icons.guide}</span>Guide
     </div>
     <div class="sidebar-divider"></div>
     <div class="sidebar-title">Workflow</div>` +
@@ -1000,7 +986,7 @@ function renderBundleSetup() {
       </div>
     </div>
     <div class="callout callout-warn" style="margin-bottom:16px;">
-      <span class="callout-icon">&#9888;</span>
+      <span class="callout-icon">${icons.alertTriangle('var(--orange)')}</span>
       <span>Reusing a bundle requires FR-28 verification of audit log chain integrity. This check is not yet implemented. Please create a new bundle.</span>
     </div>
     <div class="btn-row">
@@ -1015,14 +1001,14 @@ function renderSourceSelection() {
     <p class="subtitle">Select the files and folders to collect. Only the items you select will be collected. This is a targeted logical collection.</p>
     <hr>
     <div style="display:flex;gap:8px;margin-bottom:16px;">
-      <button class="btn btn-secondary">&#128196; Add Files&hellip;</button>
-      <button class="btn btn-secondary">&#128193; Add Folder&hellip;</button>
+      <button class="btn btn-secondary"><span class="icon-inline" style="width:14px;height:14px;">${icons.addFile}</span> Add Files&hellip;</button>
+      <button class="btn btn-secondary"><span class="icon-inline" style="width:14px;height:14px;">${icons.addFolder}</span> Add Folder&hellip;</button>
     </div>
     <div class="group-box">
       <div class="group-box-title">Selected Sources (3)</div>
       <div class="group-box-content">
         <div class="source-row">
-          <span class="source-icon" style="color:var(--accent);">&#128193;</span>
+          <span class="source-icon">${icons.folder('var(--accent)')}</span>
           <div class="source-info">
             <div class="source-path">/Users/jdoe/Documents</div>
             <div class="source-meta">1,247 files, 4.82 GB</div>
@@ -1030,7 +1016,7 @@ function renderSourceSelection() {
           <button class="source-remove">&times;</button>
         </div>
         <div class="source-row">
-          <span class="source-icon" style="color:var(--accent);">&#128193;</span>
+          <span class="source-icon">${icons.folder('var(--accent)')}</span>
           <div class="source-info">
             <div class="source-path">/Users/jdoe/Downloads</div>
             <div class="source-meta">389 files, 12.31 GB</div>
@@ -1038,7 +1024,7 @@ function renderSourceSelection() {
           <button class="source-remove">&times;</button>
         </div>
         <div class="source-row">
-          <span class="source-icon" style="color:var(--accent);">&#128196;</span>
+          <span class="source-icon">${icons.file('var(--accent)')}</span>
           <div class="source-info">
             <div class="source-path">/Users/jdoe/Desktop/financial_records.xlsx</div>
             <div class="source-meta">1 file, 2.4 MB</div>
@@ -1066,14 +1052,13 @@ function renderPreflight() {
     { name: 'macOS Version',       status: 'pass', detail: 'macOS 15.2 (Sequoia) — on validated list', blocking: true },
     { name: 'Full Disk Access',    status: 'pass', detail: 'DittoSuite has Full Disk Access permission', blocking: true },
     { name: 'Source Read Access',  status: 'pass', detail: 'All 3 selected sources are readable', blocking: true },
-    { name: 'Free Space',          status: 'pass', detail: '187.4 GB available, 17.13 GB estimated needed (10.9× margin)', blocking: true },
+    { name: 'Free Space',          status: 'pass', detail: '187.4 GB available, 17.13 GB estimated needed (10.9x margin)', blocking: true },
     { name: 'Bundle Mounted',      status: 'pass', detail: '/Volumes/EV-2026-04471-001 mounted and writable', blocking: true },
-    { name: 'ditto Binary Hash',   status: 'pass', detail: 'SHA-256: a3f8c1…e9b4d2 — matches known-good hash', blocking: false },
-    { name: 'hdiutil Binary Hash', status: 'pass', detail: 'SHA-256: 7d2e91…f4a6c8 — matches known-good hash', blocking: false },
+    { name: 'ditto Binary Hash',   status: 'pass', detail: 'SHA-256: a3f8c1...e9b4d2 — matches known-good hash', blocking: false },
+    { name: 'hdiutil Binary Hash', status: 'pass', detail: 'SHA-256: 7d2e91...f4a6c8 — matches known-good hash', blocking: false },
     { name: 'Band Count',          status: 'pass', detail: 'Current: 12 bands (limit: 100,000)', blocking: false },
     { name: 'TCC Protected Paths', status: 'warn', detail: '/Users/jdoe/Documents may contain TCC-protected items (Desktop & Documents). Access depends on FDA status.', blocking: false },
   ];
-  const allPass = checks.every(c => c.status !== 'fail');
   return `
     <h1>Pre-flight Checks</h1>
     <p class="subtitle">Verifying system readiness before collection begins.</p>
@@ -1081,7 +1066,7 @@ function renderPreflight() {
     <div class="group-box">
       <div class="group-box-content">
         <div class="verdict-banner">
-          <span class="verdict-icon" style="color:var(--green);">&#9989;</span>
+          <span class="verdict-icon">${icons.shieldCheck('var(--green)')}</span>
           <div>
             <div class="verdict-title">Ready to Proceed</div>
             <div class="verdict-sub">All blocking checks passed. 1 advisory warning.</div>
@@ -1094,8 +1079,12 @@ function renderPreflight() {
       <div class="group-box-content">
         ${checks.map(c => `
           <div class="check-row">
-            <span class="check-icon" style="color:var(--${c.status === 'pass' ? 'green' : c.status === 'warn' ? 'orange' : 'red'});">
-              ${c.status === 'pass' ? '&#10004;' : c.status === 'warn' ? '&#9888;' : '&#10006;'}
+            <span class="check-icon">
+              ${c.status === 'pass'
+                ? icons.checkCircleOutline('var(--green)')
+                : c.status === 'warn'
+                ? icons.alertTriangle('var(--orange)')
+                : icons.xCircle('var(--red)')}
             </span>
             <div style="flex:1;min-width:0;">
               <div class="check-label">
@@ -1173,7 +1162,7 @@ function renderCollection() {
       <div class="group-box-title">Errors Encountered</div>
       <div class="group-box-content">
         <div class="error-row">
-          <span class="error-icon">&#9888;</span>
+          <span class="icon-inline" style="width:14px;height:14px;color:var(--orange);">${icons.alertTriangle('var(--orange)', 14)}</span>
           <span>PERMISSION_DENIED: /Users/jdoe/Documents/.Trash/locked_file.dat</span>
         </div>
       </div>
@@ -1192,7 +1181,7 @@ function renderVerification() {
     <div class="group-box">
       <div class="group-box-content">
         <div class="verdict-banner">
-          <span class="verdict-icon" style="color:var(--green);">&#128994;</span>
+          <span class="verdict-icon">${icons.shieldCheck('var(--green)')}</span>
           <div>
             <div class="verdict-title">Overall Verdict: PASS</div>
             <div class="verdict-sub">All file hashes, sizes, and counts match between source and destination.</div>
@@ -1204,29 +1193,29 @@ function renderVerification() {
       <div class="group-box-title">Comparison Summary</div>
       <div class="group-box-content">
         <div class="check-row">
-          <span class="check-icon" style="color:var(--green);">&#10004;</span>
+          <span class="check-icon">${icons.checkCircleOutline('var(--green)')}</span>
           <div style="flex:1;"><div class="check-label">File Count Match</div></div>
           <span class="badge badge-pass">PASS</span>
         </div>
         <div class="check-row">
-          <span class="check-icon" style="color:var(--green);">&#10004;</span>
+          <span class="check-icon">${icons.checkCircleOutline('var(--green)')}</span>
           <div style="flex:1;"><div class="check-label">Total Size Match</div></div>
           <span class="badge badge-pass">PASS</span>
         </div>
         <div class="check-row">
-          <span class="check-icon" style="color:var(--green);">&#10004;</span>
+          <span class="check-icon">${icons.checkCircleOutline('var(--green)')}</span>
           <div style="flex:1;"><div class="check-label">Missing in Destination</div></div>
           <span style="font-size:12px;color:var(--fg-secondary);">None</span>
         </div>
         <div class="check-row">
-          <span class="check-icon" style="color:var(--green);">&#10004;</span>
+          <span class="check-icon">${icons.checkCircleOutline('var(--green)')}</span>
           <div style="flex:1;min-width:0;">
             <div class="check-label">Source Manifest Hash</div>
             <div class="check-detail" style="font-family:'SF Mono','Cascadia Code','Fira Code',monospace;font-size:10px;word-break:break-all;">a3f8c1b9e2d4f67a8c1b3e5d7f9a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6</div>
           </div>
         </div>
         <div class="check-row">
-          <span class="check-icon" style="color:var(--green);">&#10004;</span>
+          <span class="check-icon">${icons.checkCircleOutline('var(--green)')}</span>
           <div style="flex:1;min-width:0;">
             <div class="check-label">Destination Manifest Hash</div>
             <div class="check-detail" style="font-family:'SF Mono','Cascadia Code','Fira Code',monospace;font-size:10px;word-break:break-all;">a3f8c1b9e2d4f67a8c1b3e5d7f9a2c4e6b8d0f2a4c6e8b0d2f4a6c8e0b2d4f6</div>
@@ -1239,7 +1228,7 @@ function renderVerification() {
       <div class="group-box-title">hdiutil verify</div>
       <div class="group-box-content">
         <div class="callout callout-info">
-          <span class="callout-icon">&#8505;</span>
+          <span class="callout-icon">${icons.info('var(--blue)')}</span>
           <div>
             <div style="font-weight:600;">SKIPPED</div>
             <div style="font-size:11px;opacity:0.8;margin-top:2px;">hdiutil verify does not reliably cover writable sparsebundles (Known Limitation #4)</div>
@@ -1251,11 +1240,11 @@ function renderVerification() {
       <div class="group-box-title">Source Changes During Collection (1)</div>
       <div class="group-box-content">
         <div class="callout callout-warn" style="margin-bottom:8px;">
-          <span class="callout-icon">&#9888;</span>
+          <span class="callout-icon">${icons.alertTriangle('var(--orange)')}</span>
           <span>These source files changed while collection was in progress.</span>
         </div>
         <div class="check-row">
-          <span class="check-icon" style="color:var(--orange);">&#9888;</span>
+          <span class="check-icon">${icons.alertTriangle('var(--orange)')}</span>
           <div style="flex:1;min-width:0;">
             <div class="check-label" style="font-size:12px;">/Users/jdoe/Documents/.DS_Store</div>
             <div class="check-detail">mtime: 2026-10-08T14:22:01Z &rarr; 2026-10-08T14:25:33Z</div>
@@ -1319,7 +1308,7 @@ function renderResults() {
     <div class="group-box">
       <div class="group-box-content">
         <div class="verdict-banner">
-          <span class="verdict-icon" style="color:var(--green);">&#9989;</span>
+          <span class="verdict-icon">${icons.shieldCheck('var(--green)')}</span>
           <div>
             <div class="verdict-title">Collection Status: COMPLETE</div>
             <div class="verdict-sub" style="color:var(--green);font-weight:500;">Verification: PASS</div>
@@ -1331,21 +1320,21 @@ function renderResults() {
       <div class="group-box-title">What Was Collected</div>
       <div class="group-box-content">
         <div class="source-row">
-          <span style="color:var(--green);font-size:16px;">&#10004;</span>
+          <span class="check-icon">${icons.checkCircleOutline('var(--green)')}</span>
           <div class="source-info">
             <div class="source-path">/Users/jdoe/Documents</div>
             <div class="source-meta">1,247 files</div>
           </div>
         </div>
         <div class="source-row">
-          <span style="color:var(--green);font-size:16px;">&#10004;</span>
+          <span class="check-icon">${icons.checkCircleOutline('var(--green)')}</span>
           <div class="source-info">
             <div class="source-path">/Users/jdoe/Downloads</div>
             <div class="source-meta">389 files</div>
           </div>
         </div>
         <div class="source-row">
-          <span style="color:var(--green);font-size:16px;">&#10004;</span>
+          <span class="check-icon">${icons.checkCircleOutline('var(--green)')}</span>
           <div class="source-info">
             <div class="source-path">/Users/jdoe/Desktop/financial_records.xlsx</div>
             <div class="source-meta">1 file</div>
@@ -1381,7 +1370,7 @@ function renderResults() {
       </div>
     </div>
     <div class="callout callout-info" style="margin-top:12px;">
-      <span class="callout-icon">&#8505;</span>
+      <span class="callout-icon">${icons.info('var(--blue)')}</span>
       <span>This is a <strong>targeted logical collection</strong>, not a forensic image. Only items selected by the examiner were collected. The report includes a full audit trail with hash-chained entries.</span>
     </div>`;
 }
@@ -1509,6 +1498,60 @@ function renderGuide() {
     </div>
 
     <div class="guide-section">
+      <h2>Tips for First-Time Users</h2>
+
+      <div class="principle-card green">
+        <div class="principle-title">Start with a Practice Run</div>
+        <div class="principle-body">
+          Before collecting real evidence, run DittoSuite on a small test folder (a few files totaling under 100 MB). This helps you understand the workflow, timing, and output without any pressure. Use <code>./dittosuite.sh --guide</code> to review the forensic principles first.
+        </div>
+      </div>
+
+      <h3>Before You Begin</h3>
+      <ul>
+        <li><strong>Grant Full Disk Access</strong> &mdash; Go to System Settings &rarr; Privacy &amp; Security &rarr; Full Disk Access and add Terminal (or your terminal app). Without this, TCC-protected paths like Desktop and Documents will fail silently.</li>
+        <li><strong>Check free space</strong> &mdash; You need at least 1.5x the estimated collection size on the destination volume. The pre-flight check will warn you, but planning ahead avoids mid-collection failures.</li>
+        <li><strong>Use an external drive for the sparsebundle</strong> &mdash; Collecting to the same disk as the source is technically possible but not recommended. An external SSD keeps source and evidence physically separate.</li>
+        <li><strong>Plug in power</strong> &mdash; Large collections can take hours. A laptop going to sleep mid-collection will interrupt the process and produce a partial result.</li>
+      </ul>
+
+      <h3>During Case Setup</h3>
+      <ul>
+        <li><strong>Case ID and Evidence ID are critical</strong> &mdash; These appear on every report and in the audit log. Use your organization's naming convention. They cannot be changed after collection starts.</li>
+        <li><strong>Fill in device details</strong> &mdash; Serial number and macOS version help establish chain of custody. You can find the serial in Apple menu &rarr; About This Mac.</li>
+        <li><strong>Legal authority is optional but recommended</strong> &mdash; If you have a warrant number, consent form ID, or court order reference, recording it here saves time when writing your report.</li>
+      </ul>
+
+      <h3>Selecting Sources</h3>
+      <ul>
+        <li><strong>Be specific</strong> &mdash; Select only the folders and files relevant to your investigation. A targeted collection is faster, produces smaller bundles, and is easier to review.</li>
+        <li><strong>Watch for overlapping paths</strong> &mdash; If you select both <code>/Users/jdoe</code> and <code>/Users/jdoe/Documents</code>, the Documents folder would be collected twice. DittoSuite detects this and warns you.</li>
+        <li><strong>Note the size estimates</strong> &mdash; The summary shows total estimated size. If it exceeds your available space, remove some sources before proceeding.</li>
+      </ul>
+
+      <h3>Understanding the Results</h3>
+      <ul>
+        <li><strong>PASS means byte-identical</strong> &mdash; Every file's SHA-256 hash was independently computed on the source and the copy, and they match. This is the strongest verification available for a logical collection.</li>
+        <li><strong>Source changes are expected on a live system</strong> &mdash; Files like <code>.DS_Store</code>, browser caches, and log files often change during collection. These are flagged but do not indicate a problem with the tool.</li>
+        <li><strong>Permission denied errors are normal</strong> &mdash; Some macOS system files are protected even with Full Disk Access. These appear in the "What Was Not Collected" section with the exact reason.</li>
+        <li><strong>Always export the text report</strong> &mdash; The report is your primary deliverable. It contains the case details, what was collected, what wasn't, verification results, and the audit log reference. Save it alongside the sparsebundle.</li>
+      </ul>
+
+      <h3>Common Questions</h3>
+      <ul>
+        <li><strong>Can I collect from a mounted disk image?</strong> &mdash; Yes. Mount the image first, then select paths from the mounted volume as your sources.</li>
+        <li><strong>What if collection is interrupted?</strong> &mdash; The result is labeled "partial." You can re-run the collection from scratch with a new bundle. Never reuse a partial bundle for a new collection.</li>
+        <li><strong>How long does it take?</strong> &mdash; Roughly 1&ndash;3 minutes per GB, depending on file count and disk speed. Many small files are slower than a few large ones.</li>
+        <li><strong>Can I collect from multiple devices?</strong> &mdash; Run a separate collection for each device. Each gets its own case setup, sparsebundle, and report.</li>
+      </ul>
+
+      <div class="callout callout-info" style="margin-top:16px;">
+        <span class="callout-icon">${icons.info('var(--blue)')}</span>
+        <span>For the full forensic reference, run <code>./dittosuite.sh --guide</code> in your terminal. It covers the same principles shown in this Guide section.</span>
+      </div>
+    </div>
+
+    <div class="guide-section">
       <h2>Compliance</h2>
       <p>DittoSuite's 32-item compliance matrix maps requirements to ISO 27037, NIST SP 800-86, SWGDE best practices, and FRE 901. The tool has passed automated code review but has <strong>not been compiled, executed, or validated on macOS</strong>. Independent human validation is required before use on real evidence.</p>
     </div>`;
@@ -1528,14 +1571,15 @@ function applyTheme(t) {
   const icon = document.getElementById('themeIcon');
   const label = document.getElementById('themeLabel');
   if (t === 'dark') {
-    icon.innerHTML = '&#9788;';
+    icon.innerHTML = icons.sun;
     label.textContent = 'Light';
   } else {
-    icon.innerHTML = '&#9790;';
+    icon.innerHTML = icons.moon;
     label.textContent = 'Dark';
   }
 }
 
 renderSidebar();
 renderDetail();
+applyTheme(isDark ? 'dark' : 'light');
 </script>
