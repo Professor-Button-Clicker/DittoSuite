@@ -1,5 +1,5 @@
 {
-  "name": "forensic-mail-collector",
+  "name": "sherlock-mail",
   "version": "1.0.0",
   "description": "Forensic email acquisition and analysis tool — combines Thunderbird-style email access with Metaspike FEC forensic preservation capabilities",
   "type": "module",
@@ -28,7 +28,7 @@
     "sql.js": "^1.14.2",
     "uuid": "^10.0.0"
   },
-  "author": "ForensicMailCollector",
+  "author": "SherlockMail",
   "license": "MIT",
   "allowScripts": {
     "better-sqlite3@11.10.0": true
