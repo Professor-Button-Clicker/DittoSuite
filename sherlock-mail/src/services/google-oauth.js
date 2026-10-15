@@ -1,0 +1,197 @@
+import { google } from 'googleapis';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import http from 'http';
+import { URL } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CONFIG_DIR = path.join(__dirname, '..', '..', 'data');
+const TOKENS_PATH = path.join(CONFIG_DIR, 'google-tokens.json');
+const CREDENTIALS_PATH = path.join(CONFIG_DIR, 'google-credentials.json');
+
+const SCOPES = [
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/drive.readonly',
+];
+
+let oAuth2Client = null;
+let callbackServer = null;
+let pendingAuthResolve = null;
+
+function ensureDataDir() {
+  if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+}
+
+export function loadCredentials() {
+  if (fs.existsSync(CREDENTIALS_PATH)) {
+    const raw = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
+    const creds = raw.installed || raw.web;
+    return creds;
+  }
+  return null;
+}
+
+export function saveCredentials(credentialsJson) {
+  ensureDataDir();
+  fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(credentialsJson, null, 2));
+}
+
+export function getOAuth2Client() {
+  if (oAuth2Client) return oAuth2Client;
+
+  const creds = loadCredentials();
+  if (!creds) return null;
+
+  oAuth2Client = new google.auth.OAuth2(
+    creds.client_id,
+    creds.client_secret,
+    'http://localhost:3847/oauth2callback'
+  );
+
+  const tokens = loadTokens();
+  if (tokens) {
+    oAuth2Client.setCredentials(tokens);
+    oAuth2Client.on('tokens', (newTokens) => {
+      const merged = { ...tokens, ...newTokens };
+      saveTokens(merged);
+    });
+  }
+
+  return oAuth2Client;
+}
+
+function loadTokens() {
+  if (fs.existsSync(TOKENS_PATH)) {
+    return JSON.parse(fs.readFileSync(TOKENS_PATH, 'utf8'));
+  }
+  return null;
+}
+
+function saveTokens(tokens) {
+  ensureDataDir();
+  fs.writeFileSync(TOKENS_PATH, JSON.stringify(tokens, null, 2));
+}
+
+export function getAuthUrl() {
+  const client = getOAuth2Client();
+  if (!client) return null;
+
+  return client.generateAuthUrl({
+    access_type: 'offline',
+    scope: SCOPES,
+    prompt: 'consent',
+  });
+}
+
+export function getAuthStatus() {
+  const creds = loadCredentials();
+  if (!creds) return { configured: false, authorized: false };
+
+  const tokens = loadTokens();
+  if (!tokens) return { configured: true, authorized: false };
+
+  const expired = tokens.expiry_date && tokens.expiry_date < Date.now();
+  const hasRefresh = !!tokens.refresh_token;
+
+  return {
+    configured: true,
+    authorized: true,
+    hasRefreshToken: hasRefresh,
+    expired,
+    expiryDate: tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : null,
+  };
+}
+
+export async function handleAuthCode(code) {
+  const client = getOAuth2Client();
+  if (!client) throw new Error('OAuth credentials not configured');
+
+  const { tokens } = await client.getToken(code);
+  client.setCredentials(tokens);
+  saveTokens(tokens);
+
+  client.on('tokens', (newTokens) => {
+    const current = loadTokens() || {};
+    const merged = { ...current, ...newTokens };
+    saveTokens(merged);
+  });
+
+  return tokens;
+}
+
+export function startCallbackServer() {
+  return new Promise((resolve, reject) => {
+    if (callbackServer) {
+      resolve();
+      return;
+    }
+
+    callbackServer = http.createServer(async (req, res) => {
+      const url = new URL(req.url, 'http://localhost:3847');
+
+      if (url.pathname === '/oauth2callback') {
+        const code = url.searchParams.get('code');
+        const error = url.searchParams.get('error');
+
+        if (error) {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end('<html><body><h2>Authorization denied.</h2><p>You can close this window.</p></body></html>');
+          if (pendingAuthResolve) pendingAuthResolve({ error });
+          return;
+        }
+
+        if (code) {
+          try {
+            const tokens = await handleAuthCode(code);
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end('<html><body><h2>Authorization successful!</h2><p>You can close this window and return to SherlockMail.</p></body></html>');
+            if (pendingAuthResolve) pendingAuthResolve({ success: true, tokens });
+          } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'text/html' });
+            res.end(`<html><body><h2>Error</h2><p>${err.message}</p></body></html>`);
+            if (pendingAuthResolve) pendingAuthResolve({ error: err.message });
+          }
+          return;
+        }
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+
+    callbackServer.listen(3847, '127.0.0.1', () => {
+      resolve();
+    });
+
+    callbackServer.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        resolve();
+      } else {
+        reject(err);
+      }
+    });
+  });
+}
+
+export function waitForAuth() {
+  return new Promise((resolve) => {
+    pendingAuthResolve = resolve;
+  });
+}
+
+export function stopCallbackServer() {
+  if (callbackServer) {
+    callbackServer.close();
+    callbackServer = null;
+  }
+  pendingAuthResolve = null;
+}
+
+export function revokeTokens() {
+  if (fs.existsSync(TOKENS_PATH)) fs.unlinkSync(TOKENS_PATH);
+  if (oAuth2Client) {
+    oAuth2Client.revokeCredentials().catch(() => {});
+    oAuth2Client = null;
+  }
+}

@@ -262,6 +262,24 @@
                     <label class="toggle-label"><input type="checkbox" id="wiz-differential"> Differential Collection</label>
                   </div>
                 </div>
+                <div id="wiz-gmail-oauth" style="display:none;margin-bottom:16px">
+                  <div style="padding:16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface)">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+                      <span id="gmail-oauth-status" style="font-size:13px;color:var(--text-muted)">Checking authorization...</span>
+                    </div>
+                    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                      <button type="button" class="btn btn-primary" onclick="gmailAuthorize()">Authorize with Google</button>
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="gmailCheckStatus()">Check Status</button>
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="gmailRevoke()" style="color:var(--error)">Revoke Access</button>
+                    </div>
+                    <div style="margin-top:12px">
+                      <label style="font-size:12px;color:var(--text-muted);cursor:pointer">
+                        <input type="file" id="gmail-creds-file" accept=".json" onchange="gmailUploadCredentials(this)" style="display:none">
+                        Upload client_secret JSON (one-time setup)
+                      </label>
+                    </div>
+                  </div>
+                </div>
                 <div style="display:flex;gap:12px;align-items:center">
                   <button type="button" class="btn btn-primary" onclick="wizTestConnection()">Test Connection</button>
                   <button type="button" class="btn btn-secondary btn-sm" onclick="wizDetectProvider()">Auto-Detect Provider</button>

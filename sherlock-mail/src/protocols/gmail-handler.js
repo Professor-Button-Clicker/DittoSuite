@@ -1,16 +1,14 @@
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
-
-// Gmail API handler
-// Demonstrates how FEC connects to Gmail and Google Workspace via REST API
-// In production, uses googleapis npm package with OAuth2
+import { google } from 'googleapis';
+import { getOAuth2Client, getAuthStatus } from '../services/google-oauth.js';
 
 export class GmailHandler {
   constructor(config) {
     this.config = config;
     this.protocolLog = [];
-    this.accessToken = null;
-    this.baseUrl = 'https://gmail.googleapis.com/gmail/v1';
+    this.gmail = null;
+    this.userEmail = null;
   }
 
   log(direction, message) {
@@ -22,158 +20,157 @@ export class GmailHandler {
   }
 
   async connect() {
-    const { email, authType } = this.config;
-
-    this.log('CLIENT', `Connecting to Gmail API - Auth: ${authType || 'oauth2'}`);
-
-    if (authType === 'service_account') {
-      // Service account authentication for Google Workspace admin
-      this.log('C→S', 'POST https://oauth2.googleapis.com/token');
-      this.log('C→S', 'grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer');
-      this.log('C→S', `JWT assertion with subject=${email} (domain-wide delegation)`);
-      this.log('S→C', 'Token response: access_token=*****, expires_in=3600');
-    } else {
-      // OAuth2 authorization code flow
-      this.log('C→S', 'GET https://accounts.google.com/o/oauth2/v2/auth');
-      this.log('C→S', 'scope=https://www.googleapis.com/auth/gmail.readonly');
-      this.log('CLIENT', 'Redirect user to Google consent screen');
-      this.log('S→C', 'Authorization code received');
-      this.log('C→S', 'POST https://oauth2.googleapis.com/token');
-      this.log('S→C', 'Token response: access_token=*****, refresh_token=*****');
+    const status = getAuthStatus();
+    if (!status.authorized) {
+      throw new Error('Google account not authorized. Click "Authorize with Google" first.');
     }
 
-    this.accessToken = 'simulated_token';
+    const auth = getOAuth2Client();
+    this.gmail = google.gmail({ version: 'v1', auth });
 
-    // Test connection
-    this.log('C→S', `GET ${this.baseUrl}/users/me/profile`);
-    this.log('S→C', `200 OK - emailAddress: "${email}", messagesTotal: 15234`);
+    this.log('CLIENT', 'Connecting to Gmail API via OAuth2');
+    this.log('C→S', 'GET https://gmail.googleapis.com/gmail/v1/users/me/profile');
+
+    const profile = await this.gmail.users.getProfile({ userId: 'me' });
+    this.userEmail = profile.data.emailAddress;
+
+    this.log('S→C', `200 OK - emailAddress: "${this.userEmail}", messagesTotal: ${profile.data.messagesTotal}`);
 
     return {
       success: true,
-      email,
-      messagesTotal: 15234,
-      threadsTotal: 8912,
+      email: this.userEmail,
+      messagesTotal: profile.data.messagesTotal,
+      threadsTotal: profile.data.threadsTotal,
       capabilities: this.constructor.getCapabilities(),
     };
   }
 
   async listLabels() {
-    // Gmail uses labels instead of traditional IMAP folders
-    this.log('C→S', `GET ${this.baseUrl}/users/me/labels`);
+    this.log('C→S', 'GET https://gmail.googleapis.com/gmail/v1/users/me/labels');
 
-    const labels = [
-      { id: 'INBOX', name: 'INBOX', type: 'system', totalMessages: 2341, unseenMessages: 89 },
-      { id: 'SENT', name: 'SENT', type: 'system', totalMessages: 1567, unseenMessages: 0 },
-      { id: 'DRAFT', name: 'DRAFT', type: 'system', totalMessages: 12, unseenMessages: 0 },
-      { id: 'SPAM', name: 'SPAM', type: 'system', totalMessages: 234, unseenMessages: 234 },
-      { id: 'TRASH', name: 'TRASH', type: 'system', totalMessages: 178, unseenMessages: 0 },
-      { id: 'STARRED', name: 'STARRED', type: 'system', totalMessages: 45, unseenMessages: 0 },
-      { id: 'IMPORTANT', name: 'IMPORTANT', type: 'system', totalMessages: 890, unseenMessages: 0 },
-      { id: 'CATEGORY_PERSONAL', name: 'Personal', type: 'system', totalMessages: 1200, unseenMessages: 34 },
-      { id: 'CATEGORY_SOCIAL', name: 'Social', type: 'system', totalMessages: 456, unseenMessages: 22 },
-      { id: 'CATEGORY_PROMOTIONS', name: 'Promotions', type: 'system', totalMessages: 890, unseenMessages: 89 },
-      { id: 'Label_1', name: 'Work/Projects', type: 'user', totalMessages: 234, unseenMessages: 5 },
-      { id: 'Label_2', name: 'Work/Legal', type: 'user', totalMessages: 67, unseenMessages: 0 },
-      { id: 'Label_3', name: 'Personal/Finance', type: 'user', totalMessages: 89, unseenMessages: 2 },
-    ];
+    const res = await this.gmail.users.labels.list({ userId: 'me' });
+    const labels = res.data.labels || [];
 
-    // Convert to folder format for consistency
-    const folders = labels.map(l => ({
-      id: uuidv4(),
-      path: l.name,
-      name: l.name.split('/').pop(),
-      totalMessages: l.totalMessages,
-      unseenMessages: l.unseenMessages,
-      flags: [l.type],
-      delimiter: '/',
-      parentPath: l.name.includes('/') ? l.name.substring(0, l.name.lastIndexOf('/')) : null,
-    }));
+    const folders = [];
+    for (const label of labels) {
+      const detail = await this.gmail.users.labels.get({ userId: 'me', id: label.id });
+      const d = detail.data;
+      folders.push({
+        id: uuidv4(),
+        path: d.name,
+        name: d.name.split('/').pop(),
+        gmailLabelId: d.id,
+        totalMessages: d.messagesTotal || 0,
+        unseenMessages: d.messagesUnread || 0,
+        flags: [d.type?.toLowerCase() || 'user'],
+        delimiter: '/',
+        parentPath: d.name.includes('/') ? d.name.substring(0, d.name.lastIndexOf('/')) : null,
+      });
+    }
 
-    this.log('S→C', `200 OK - ${labels.length} labels returned`);
+    this.log('S→C', `200 OK - ${folders.length} labels returned`);
     return folders;
   }
 
-  async searchMessages(criteria) {
-    // Gmail API supports powerful search via q parameter
-    // Uses the same syntax as the Gmail search bar
-    const queryParts = [];
+  async fetchMessages(labelIdOrFolder, { limit } = {}) {
+    const labelId = typeof labelIdOrFolder === 'string'
+      ? labelIdOrFolder
+      : labelIdOrFolder.gmailLabelId || labelIdOrFolder.path || labelIdOrFolder;
 
-    if (criteria.keyword) queryParts.push(criteria.keyword);
-    if (criteria.from) queryParts.push(`from:${criteria.from}`);
-    if (criteria.to) queryParts.push(`to:${criteria.to}`);
-    if (criteria.subject) queryParts.push(`subject:${criteria.subject}`);
-    if (criteria.hasAttachment) queryParts.push('has:attachment');
-    if (criteria.since) queryParts.push(`after:${criteria.since.replace(/-/g, '/')}`);
-    if (criteria.before) queryParts.push(`before:${criteria.before.replace(/-/g, '/')}`);
-    if (criteria.label) queryParts.push(`label:${criteria.label}`);
-    if (criteria.larger) queryParts.push(`larger:${criteria.larger}`);
-    if (criteria.smaller) queryParts.push(`smaller:${criteria.smaller}`);
-    if (criteria.isUnread) queryParts.push('is:unread');
-    if (criteria.isStarred) queryParts.push('is:starred');
-    if (criteria.inTrash) queryParts.push('in:trash');
-    if (criteria.inSpam) queryParts.push('in:spam');
-    if (criteria.filename) queryParts.push(`filename:${criteria.filename}`);
-
-    const query = queryParts.join(' ') || '';
-    this.log('C→S', `GET ${this.baseUrl}/users/me/messages?q=${encodeURIComponent(query)}&maxResults=500`);
-
-    const resultCount = Math.floor(Math.random() * 100) + 5;
-    this.log('S→C', `200 OK - resultSizeEstimate: ${resultCount}`);
-
-    return {
-      query,
-      resultCount,
-      searchId: uuidv4(),
-    };
-  }
-
-  async fetchMessages(labelId, { limit } = {}) {
-    const maxResults = limit || 25;
-    this.log('C→S', `GET ${this.baseUrl}/users/me/messages?labelIds=${labelId}&maxResults=${maxResults}`);
+    const maxResults = limit || 100;
+    this.log('C→S', `GET /users/me/messages?labelIds=${labelId}&maxResults=${maxResults}`);
 
     const messages = [];
-    const count = Math.min(maxResults, 4 + Math.floor(Math.random() * 8));
+    let pageToken = null;
+    let fetched = 0;
 
-    for (let i = 0; i < count; i++) {
-      const msgId = uuidv4().replace(/-/g, '').substring(0, 16);
-      this.log('C→S', `GET ${this.baseUrl}/users/me/messages/${msgId}?format=raw`);
+    do {
+      const params = {
+        userId: 'me',
+        labelIds: [labelId],
+        maxResults: Math.min(maxResults - fetched, 100),
+      };
+      if (pageToken) params.pageToken = pageToken;
 
-      const subject = `Gmail message ${i + 1} from ${labelId}`;
-      const rawContent = `From: gmail-user@gmail.com\r\nTo: recipient@example.com\r\nSubject: ${subject}\r\nDate: ${new Date(Date.now() - i * 86400000).toUTCString()}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\nMessage body from ${labelId} via Gmail API.`;
-      const rawBuffer = Buffer.from(rawContent);
+      const list = await this.gmail.users.messages.list(params);
+      const msgIds = list.data.messages || [];
+      pageToken = list.data.nextPageToken;
 
-      this.log('S→C', `200 OK - raw MIME (${rawBuffer.length} bytes, base64url encoded)`);
+      for (const stub of msgIds) {
+        if (fetched >= maxResults) break;
 
-      messages.push({
-        id: uuidv4(),
-        uid: i + 1,
-        folder: labelId,
-        subject,
-        fromAddress: 'gmail-user@gmail.com',
-        toAddresses: ['recipient@example.com'],
-        date: new Date(Date.now() - i * 86400000).toISOString(),
-        size: rawBuffer.length,
-        hashMd5: crypto.createHash('md5').update(rawBuffer).digest('hex'),
-        hashSha256: crypto.createHash('sha256').update(rawBuffer).digest('hex'),
-        hashSha512: crypto.createHash('sha512').update(rawBuffer).digest('hex'),
-        hasAttachments: false,
-        attachmentCount: 0,
-        bodyText: `Message body from ${labelId} via Gmail API.`,
-        contentType: 'text/plain',
-      });
-    }
+        this.log('C→S', `GET /users/me/messages/${stub.id}?format=raw`);
+
+        const full = await this.gmail.users.messages.get({
+          userId: 'me',
+          id: stub.id,
+          format: 'raw',
+        });
+
+        const rawBuffer = Buffer.from(full.data.raw, 'base64url');
+        this.log('S→C', `200 OK - raw MIME (${rawBuffer.length} bytes)`);
+
+        const headers = this.parseHeaders(rawBuffer.toString('utf8', 0, Math.min(rawBuffer.length, 8192)));
+
+        messages.push({
+          id: uuidv4(),
+          uid: fetched + 1,
+          gmailId: stub.id,
+          folder: labelId,
+          subject: headers.subject || '(no subject)',
+          fromAddress: headers.from || '',
+          toAddresses: headers.to ? headers.to.split(',').map(s => s.trim()) : [],
+          ccAddresses: headers.cc ? headers.cc.split(',').map(s => s.trim()) : [],
+          date: headers.date ? new Date(headers.date).toISOString() : new Date(parseInt(full.data.internalDate)).toISOString(),
+          size: rawBuffer.length,
+          hashMd5: crypto.createHash('md5').update(rawBuffer).digest('hex'),
+          hashSha256: crypto.createHash('sha256').update(rawBuffer).digest('hex'),
+          hashSha512: crypto.createHash('sha512').update(rawBuffer).digest('hex'),
+          hasAttachments: (full.data.payload?.parts || []).some(p => p.filename),
+          attachmentCount: (full.data.payload?.parts || []).filter(p => p.filename).length,
+          bodyText: this.extractBody(rawBuffer.toString('utf8')),
+          contentType: headers['content-type'] || 'text/plain',
+          rawMime: rawBuffer,
+        });
+
+        fetched++;
+      }
+    } while (pageToken && fetched < maxResults);
 
     this.log('CLIENT', `Fetched ${messages.length} messages from ${labelId} via Gmail API`);
     return messages;
   }
 
-  async disconnect() {
-    // Revoke token if needed
-    if (this.accessToken) {
-      this.log('C→S', 'POST https://oauth2.googleapis.com/revoke');
-      this.log('S→C', '200 OK - Token revoked');
+  parseHeaders(headerBlock) {
+    const headers = {};
+    const endOfHeaders = headerBlock.indexOf('\r\n\r\n');
+    const block = endOfHeaders > 0 ? headerBlock.substring(0, endOfHeaders) : headerBlock;
+    const lines = block.split(/\r?\n/);
+    let currentKey = null;
+
+    for (const line of lines) {
+      if (line.startsWith(' ') || line.startsWith('\t')) {
+        if (currentKey) headers[currentKey] += ' ' + line.trim();
+      } else {
+        const colonIdx = line.indexOf(':');
+        if (colonIdx > 0) {
+          currentKey = line.substring(0, colonIdx).toLowerCase();
+          headers[currentKey] = line.substring(colonIdx + 1).trim();
+        }
+      }
     }
-    this.accessToken = null;
+
+    return headers;
+  }
+
+  extractBody(raw) {
+    const bodyStart = raw.indexOf('\r\n\r\n');
+    if (bodyStart < 0) return '';
+    return raw.substring(bodyStart + 4, bodyStart + 4 + 1000).trim();
+  }
+
+  async disconnect() {
+    this.gmail = null;
     this.log('CLIENT', 'Gmail API session ended');
   }
 

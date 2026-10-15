@@ -890,6 +890,8 @@ function wizBack() {
 function wizUpdateProtocolFields() {
   const protocol = document.getElementById('wiz-protocol').value;
   const fields = document.getElementById('wiz-protocol-fields');
+  const gmailOAuth = document.getElementById('wiz-gmail-oauth');
+
   if (protocol === 'ews' || protocol === 'graph' || protocol === 'gmail_api') {
     fields.style.display = 'none';
   } else {
@@ -897,6 +899,13 @@ function wizUpdateProtocolFields() {
     const portInput = document.getElementById('wiz-port');
     if (protocol === 'pop3') portInput.value = 995;
     else portInput.value = 993;
+  }
+
+  if (protocol === 'gmail_api') {
+    gmailOAuth.style.display = '';
+    gmailCheckStatus();
+  } else {
+    gmailOAuth.style.display = 'none';
   }
 }
 
@@ -1237,4 +1246,70 @@ function toast(msg) {
   el.textContent = msg;
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 3000);
+}
+
+// --- Gmail OAuth ---
+async function gmailCheckStatus() {
+  const el = document.getElementById('gmail-oauth-status');
+  try {
+    const status = await api('/oauth/google/status');
+    if (!status.configured) {
+      el.innerHTML = '<span style="color:var(--warning)">Not configured — upload client_secret JSON below</span>';
+    } else if (!status.authorized) {
+      el.innerHTML = '<span style="color:var(--warning)">Credentials loaded. Click "Authorize with Google" to connect.</span>';
+    } else {
+      el.innerHTML = '<span class="verify-pass">Authorized with Google</span>';
+    }
+  } catch {
+    el.innerHTML = '<span class="verify-fail">Could not check OAuth status</span>';
+  }
+}
+
+async function gmailAuthorize() {
+  const el = document.getElementById('gmail-oauth-status');
+  el.innerHTML = '<span style="color:var(--accent)">Opening Google authorization...</span>';
+
+  try {
+    const { url } = await api('/oauth/google/authorize');
+    if (!url) { el.innerHTML = '<span class="verify-fail">Upload credentials first</span>'; return; }
+
+    window.open(url, '_blank');
+    el.innerHTML = '<span style="color:var(--accent)">Waiting for authorization in browser...</span>';
+
+    const result = await api('/oauth/google/wait');
+    if (result.success) {
+      el.innerHTML = '<span class="verify-pass">Authorized with Google</span>';
+      toast('Google account authorized successfully');
+    } else {
+      el.innerHTML = `<span class="verify-fail">Authorization failed: ${esc(result.error || 'Unknown')}</span>`;
+    }
+  } catch (err) {
+    el.innerHTML = `<span class="verify-fail">Error: ${esc(err.message)}</span>`;
+  }
+}
+
+async function gmailRevoke() {
+  try {
+    await api('/oauth/google/revoke', { method: 'POST' });
+    toast('Google access revoked');
+    gmailCheckStatus();
+  } catch (err) {
+    toast('Failed to revoke: ' + err.message);
+  }
+}
+
+async function gmailUploadCredentials(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    const json = JSON.parse(text);
+    await api('/oauth/google/credentials', { method: 'POST', body: json });
+    toast('Google credentials uploaded');
+    gmailCheckStatus();
+  } catch (err) {
+    toast('Failed to upload credentials: ' + err.message);
+  }
+  input.value = '';
 }

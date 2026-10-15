@@ -26,6 +26,10 @@ import { InlineSearchEngine } from '../services/inline-search.js';
 import { QualityControlService } from '../services/quality-control.js';
 import { CloudAttachmentService } from '../services/cloud-attachment-service.js';
 import { TimestampService } from '../services/timestamp-service.js';
+import {
+  getAuthStatus, getAuthUrl, saveCredentials, loadCredentials,
+  startCallbackServer, waitForAuth, stopCallbackServer, revokeTokens,
+} from '../services/google-oauth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', '..', 'data');
@@ -37,6 +41,47 @@ router.get('/stats', (req, res) => {
   const stats = getStats();
   stats.version = '2.1.0';
   res.json(stats);
+});
+
+// ── Google OAuth ──
+router.get('/oauth/google/status', (req, res) => {
+  res.json(getAuthStatus());
+});
+
+router.post('/oauth/google/credentials', (req, res) => {
+  try {
+    saveCredentials(req.body);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/oauth/google/authorize', async (req, res) => {
+  try {
+    await startCallbackServer();
+    const url = getAuthUrl();
+    if (!url) return res.status(400).json({ error: 'OAuth credentials not configured. Upload client_secret JSON first.' });
+    res.json({ url });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/oauth/google/wait', async (req, res) => {
+  try {
+    const result = await waitForAuth();
+    stopCallbackServer();
+    res.json(result);
+  } catch (err) {
+    stopCallbackServer();
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/oauth/google/revoke', (req, res) => {
+  revokeTokens();
+  res.json({ success: true });
 });
 
 // ── Projects ──
