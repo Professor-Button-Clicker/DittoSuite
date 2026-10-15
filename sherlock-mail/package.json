@@ -1,17 +1,64 @@
 {
   "name": "sherlock-mail",
-  "version": "2.0.0",
-  "description": "Comprehensive forensic email collection tool — full-capability FEC-grade acquisition, inline search, quality control, and evidence integrity",
-  "main": "server.js",
+  "version": "2.1.0",
+  "description": "FEC-grade forensic email collection desktop app — acquisition, inline search, quality control, and evidence integrity",
+  "main": "main.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "start": "electron .",
+    "server": "node server.js",
+    "dev": "node --watch server.js",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.sherlockmail.forensic",
+    "productName": "SherlockMail",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "server.js",
+      "public/**/*",
+      "src/**/*",
+      "node_modules/**/*",
+      "!node_modules/**/test/**",
+      "!node_modules/**/tests/**",
+      "!node_modules/**/*.md",
+      "!node_modules/**/CHANGELOG*",
+      "!node_modules/**/LICENSE*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
+    },
+    "mac": {
+      "target": ["dmg"]
+    },
+    "linux": {
+      "target": ["AppImage"]
+    }
   },
   "dependencies": {
     "express": "^4.21.0",
     "imapflow": "^1.0.171",
     "mailparser": "^3.7.1",
     "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "electron": "^44.7.2",
+    "electron-builder": "^26.15.3"
   }
 }
