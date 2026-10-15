@@ -351,7 +351,7 @@ export class ExportService {
   static generateHashManifest(exportedFiles) {
     const manifest = {
       generated: new Date().toISOString(),
-      tool: 'SherlockMail v2.0.0',
+      tool: 'SherlockMail v2.1.0',
       algorithm: 'SHA-256',
       fileCount: exportedFiles.length,
       totalBytes: exportedFiles.reduce((sum, f) => sum + f.size, 0),
