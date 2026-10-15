@@ -34,6 +34,7 @@ async function createWindow(port) {
     minWidth: 900,
     minHeight: 600,
     title: 'SherlockMail',
+    icon: join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
