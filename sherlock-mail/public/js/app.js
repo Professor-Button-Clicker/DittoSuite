@@ -887,26 +887,131 @@ function wizBack() {
   wizGoToStep(wizStep - 1);
 }
 
+const PROVIDER_MAP = {
+  'gmail.com': 'gmail', 'googlemail.com': 'gmail',
+  'outlook.com': 'microsoft', 'hotmail.com': 'microsoft', 'live.com': 'microsoft', 'msn.com': 'microsoft',
+  'zoho.com': 'zoho', 'zohomail.com': 'zoho', 'zohomail.eu': 'zoho', 'zohomail.in': 'zoho',
+  'fastmail.com': 'fastmail', 'fastmail.fm': 'fastmail', 'messagingengine.com': 'fastmail',
+  'yahoo.com': 'yahoo', 'ymail.com': 'yahoo', 'rocketmail.com': 'yahoo',
+  'aol.com': 'aol', 'aim.com': 'aol',
+  'icloud.com': 'icloud', 'me.com': 'icloud', 'mac.com': 'icloud',
+  'protonmail.com': 'protonmail', 'proton.me': 'protonmail', 'pm.me': 'protonmail',
+  'yandex.com': 'yandex', 'yandex.ru': 'yandex', 'ya.ru': 'yandex',
+};
+
+const PROVIDER_PROTOCOLS = {
+  gmail:      { best: 'gmail_api', options: ['gmail_api', 'imap', 'pop3'] },
+  microsoft:  { best: 'graph',    options: ['graph', 'ews', 'imap', 'pop3'] },
+  zoho:       { best: 'zoho_api', options: ['zoho_api', 'imap', 'pop3'] },
+  fastmail:   { best: 'jmap',     options: ['jmap', 'imap', 'pop3'] },
+  yahoo:      { best: 'imap',     options: ['imap', 'pop3'] },
+  aol:        { best: 'imap',     options: ['imap', 'pop3'] },
+  icloud:     { best: 'imap',     options: ['imap'] },
+  protonmail: { best: 'imap',     options: ['imap'] },
+  yandex:     { best: 'imap',     options: ['imap', 'pop3'] },
+  other:      { best: 'imap',     options: ['imap', 'pop3', 'ews', 'graph', 'gmail_api', 'zoho_api', 'jmap'] },
+};
+
+const PROVIDER_PRESETS = {
+  gmail:      { imap: { host: 'imap.gmail.com', port: 993 }, pop3: { host: 'pop.gmail.com', port: 995 } },
+  microsoft:  { imap: { host: 'outlook.office365.com', port: 993 }, pop3: { host: 'outlook.office365.com', port: 995 } },
+  zoho:       { imap: { host: 'imap.zoho.com', port: 993 }, pop3: { host: 'pop.zoho.com', port: 995 } },
+  fastmail:   { imap: { host: 'imap.fastmail.com', port: 993 }, pop3: { host: 'pop.fastmail.com', port: 995 } },
+  yahoo:      { imap: { host: 'imap.mail.yahoo.com', port: 993 }, pop3: { host: 'pop.mail.yahoo.com', port: 995 } },
+  aol:        { imap: { host: 'imap.aol.com', port: 993 }, pop3: { host: 'pop.aol.com', port: 995 } },
+  icloud:     { imap: { host: 'imap.mail.me.com', port: 993 } },
+  protonmail: { imap: { host: '127.0.0.1', port: 1143 } },
+  yandex:     { imap: { host: 'imap.yandex.com', port: 993 }, pop3: { host: 'pop.yandex.com', port: 995 } },
+};
+
+const PROVIDER_NOTES = {
+  gmail: 'Gmail API provides the most complete collection with label support and raw MIME download. Requires one-time Google Cloud OAuth setup.',
+  microsoft: 'Graph API is the modern replacement for EWS. Free Azure AD app registration. Supports mail, OneDrive, SharePoint.',
+  zoho: 'Zoho Mail API provides full REST access. Register at api-console.zoho.com (free). Select your region.',
+  fastmail: 'JMAP is an open standard (RFC 8621). Generate an API token in Fastmail Settings > Privacy & Security > API tokens.',
+  yahoo: 'No REST API available. Use IMAP with an app-specific password from Yahoo Account Security settings.',
+  aol: 'No REST API available. Same infrastructure as Yahoo. Generate app-specific password in AOL settings.',
+  icloud: 'No REST API. Requires an app-specific password from appleid.apple.com. POP3 not supported.',
+  protonmail: 'Requires Proton Mail Bridge running locally (paid plans only). Bridge runs local IMAP on port 1143.',
+  yandex: 'No public REST API. Use IMAP with app password from Yandex account settings.',
+  other: 'Enter server details manually. IMAP is the most widely supported protocol for forensic collection.',
+};
+
+function wizAutoDetectProvider() {
+  const email = document.getElementById('wiz-email').value.trim();
+  const providerSelect = document.getElementById('wiz-provider');
+  if (!email || !email.includes('@') || providerSelect.value) return;
+
+  const domain = email.split('@')[1].toLowerCase();
+  const provider = PROVIDER_MAP[domain] || 'other';
+  providerSelect.value = provider;
+  wizProviderChanged();
+}
+
+function wizProviderChanged() {
+  const providerId = document.getElementById('wiz-provider').value || 'other';
+  const protocolSelect = document.getElementById('wiz-protocol');
+  const noteEl = document.getElementById('wiz-provider-note');
+
+  const config = PROVIDER_PROTOCOLS[providerId] || PROVIDER_PROTOCOLS.other;
+
+  const allOptions = protocolSelect.querySelectorAll('option');
+  allOptions.forEach(opt => {
+    opt.style.display = config.options.includes(opt.value) ? '' : 'none';
+  });
+
+  protocolSelect.value = config.best;
+
+  if (PROVIDER_NOTES[providerId]) {
+    noteEl.textContent = PROVIDER_NOTES[providerId];
+    noteEl.style.display = '';
+  } else {
+    noteEl.style.display = 'none';
+  }
+
+  const preset = PROVIDER_PRESETS[providerId]?.[config.best];
+  if (preset) {
+    if (preset.host) document.getElementById('wiz-host').value = preset.host;
+    if (preset.port) document.getElementById('wiz-port').value = preset.port;
+  }
+
+  wizUpdateProtocolFields();
+}
+
 function wizUpdateProtocolFields() {
   const protocol = document.getElementById('wiz-protocol').value;
   const fields = document.getElementById('wiz-protocol-fields');
   const gmailOAuth = document.getElementById('wiz-gmail-oauth');
+  const msOAuth = document.getElementById('wiz-microsoft-oauth');
+  const zohoOAuth = document.getElementById('wiz-zoho-oauth');
+  const fmAuth = document.getElementById('wiz-fastmail-auth');
 
-  if (protocol === 'ews' || protocol === 'graph' || protocol === 'gmail_api') {
+  const apiProtocols = ['ews', 'graph', 'gmail_api', 'zoho_api', 'jmap'];
+  if (apiProtocols.includes(protocol)) {
     fields.style.display = 'none';
   } else {
     fields.style.display = '';
-    const portInput = document.getElementById('wiz-port');
-    if (protocol === 'pop3') portInput.value = 995;
-    else portInput.value = 993;
+    const providerId = document.getElementById('wiz-provider').value;
+    const preset = PROVIDER_PRESETS[providerId]?.[protocol];
+    if (preset) {
+      if (preset.host) document.getElementById('wiz-host').value = preset.host;
+      if (preset.port) document.getElementById('wiz-port').value = preset.port;
+    } else {
+      const portInput = document.getElementById('wiz-port');
+      if (protocol === 'pop3') portInput.value = 995;
+      else portInput.value = 993;
+    }
   }
 
-  if (protocol === 'gmail_api') {
-    gmailOAuth.style.display = '';
-    gmailCheckStatus();
-  } else {
-    gmailOAuth.style.display = 'none';
-  }
+  gmailOAuth.style.display = protocol === 'gmail_api' ? '' : 'none';
+  msOAuth.style.display = protocol === 'graph' ? '' : 'none';
+  zohoOAuth.style.display = protocol === 'zoho_api' ? '' : 'none';
+  fmAuth.style.display = protocol === 'jmap' ? '' : 'none';
+
+  if (protocol === 'gmail_api') gmailCheckStatus();
+  if (protocol === 'graph') msCheckStatus();
+  if (protocol === 'zoho_api') zohoCheckStatus();
+  if (protocol === 'jmap') fmCheckStatus();
 }
 
 function wizSaveConnection() {
@@ -1312,4 +1417,181 @@ async function gmailUploadCredentials(input) {
     toast('Failed to upload credentials: ' + err.message);
   }
   input.value = '';
+}
+
+// --- Microsoft OAuth ---
+async function msCheckStatus() {
+  const el = document.getElementById('ms-oauth-status');
+  try {
+    const status = await api('/oauth/microsoft/status');
+    if (!status.configured) {
+      el.innerHTML = '<span style="color:var(--warning)">Not configured — enter Client ID and Secret below</span>';
+    } else if (!status.authorized) {
+      el.innerHTML = '<span style="color:var(--warning)">Credentials saved. Click "Authorize with Microsoft" to connect.</span>';
+    } else {
+      el.innerHTML = '<span class="verify-pass">Authorized with Microsoft</span>';
+    }
+  } catch {
+    el.innerHTML = '<span class="verify-fail">Could not check OAuth status</span>';
+  }
+}
+
+async function msAuthorize() {
+  const el = document.getElementById('ms-oauth-status');
+  el.innerHTML = '<span style="color:var(--accent)">Opening Microsoft authorization...</span>';
+
+  try {
+    const { url } = await api('/oauth/microsoft/authorize');
+    if (!url) { el.innerHTML = '<span class="verify-fail">Save credentials first</span>'; return; }
+
+    window.open(url, '_blank');
+    el.innerHTML = '<span style="color:var(--accent)">Waiting for authorization in browser...</span>';
+
+    const result = await api('/oauth/microsoft/wait');
+    if (result.success) {
+      el.innerHTML = '<span class="verify-pass">Authorized with Microsoft</span>';
+      toast('Microsoft account authorized successfully');
+    } else {
+      el.innerHTML = `<span class="verify-fail">Authorization failed: ${esc(result.error || 'Unknown')}</span>`;
+    }
+  } catch (err) {
+    el.innerHTML = `<span class="verify-fail">Error: ${esc(err.message)}</span>`;
+  }
+}
+
+async function msRevoke() {
+  try {
+    await api('/oauth/microsoft/revoke', { method: 'POST' });
+    toast('Microsoft access revoked');
+    msCheckStatus();
+  } catch (err) {
+    toast('Failed to revoke: ' + err.message);
+  }
+}
+
+async function msSaveCredentials() {
+  const clientId = document.getElementById('ms-client-id').value.trim();
+  const clientSecret = document.getElementById('ms-client-secret').value.trim();
+  if (!clientId || !clientSecret) { toast('Enter both Client ID and Client Secret'); return; }
+
+  try {
+    await api('/oauth/microsoft/credentials', {
+      method: 'POST',
+      body: { client_id: clientId, client_secret: clientSecret },
+    });
+    toast('Microsoft credentials saved');
+    msCheckStatus();
+  } catch (err) {
+    toast('Failed to save credentials: ' + err.message);
+  }
+}
+
+// --- Zoho OAuth ---
+async function zohoCheckStatus() {
+  const el = document.getElementById('zoho-oauth-status');
+  try {
+    const status = await api('/oauth/zoho/status');
+    if (!status.configured) {
+      el.innerHTML = '<span style="color:var(--warning)">Not configured — enter Client ID and Secret below</span>';
+    } else if (!status.authorized) {
+      el.innerHTML = '<span style="color:var(--warning)">Credentials saved. Click "Authorize with Zoho" to connect.</span>';
+    } else {
+      el.innerHTML = '<span class="verify-pass">Authorized with Zoho</span>';
+    }
+  } catch {
+    el.innerHTML = '<span class="verify-fail">Could not check OAuth status</span>';
+  }
+}
+
+async function zohoAuthorize() {
+  const el = document.getElementById('zoho-oauth-status');
+  el.innerHTML = '<span style="color:var(--accent)">Opening Zoho authorization...</span>';
+
+  try {
+    const { url } = await api('/oauth/zoho/authorize');
+    if (!url) { el.innerHTML = '<span class="verify-fail">Save credentials first</span>'; return; }
+
+    window.open(url, '_blank');
+    el.innerHTML = '<span style="color:var(--accent)">Waiting for authorization in browser...</span>';
+
+    const result = await api('/oauth/zoho/wait');
+    if (result.success) {
+      el.innerHTML = '<span class="verify-pass">Authorized with Zoho</span>';
+      toast('Zoho account authorized successfully');
+    } else {
+      el.innerHTML = `<span class="verify-fail">Authorization failed: ${esc(result.error || 'Unknown')}</span>`;
+    }
+  } catch (err) {
+    el.innerHTML = `<span class="verify-fail">Error: ${esc(err.message)}</span>`;
+  }
+}
+
+async function zohoRevoke() {
+  try {
+    await api('/oauth/zoho/revoke', { method: 'POST' });
+    toast('Zoho access revoked');
+    zohoCheckStatus();
+  } catch (err) {
+    toast('Failed to revoke: ' + err.message);
+  }
+}
+
+async function zohoSaveCredentials() {
+  const clientId = document.getElementById('zoho-client-id').value.trim();
+  const clientSecret = document.getElementById('zoho-client-secret').value.trim();
+  const region = document.getElementById('zoho-region').value;
+  if (!clientId || !clientSecret) { toast('Enter both Client ID and Client Secret'); return; }
+
+  try {
+    await api('/oauth/zoho/credentials', {
+      method: 'POST',
+      body: { client_id: clientId, client_secret: clientSecret, region },
+    });
+    toast('Zoho credentials saved');
+    zohoCheckStatus();
+  } catch (err) {
+    toast('Failed to save credentials: ' + err.message);
+  }
+}
+
+// --- Fastmail Auth ---
+async function fmCheckStatus() {
+  const el = document.getElementById('fm-auth-status');
+  try {
+    const status = await api('/oauth/fastmail/status');
+    if (!status.configured) {
+      el.innerHTML = '<span style="color:var(--warning)">No API token configured — enter your token below</span>';
+    } else {
+      el.innerHTML = `<span class="verify-pass">API token configured (${esc(status.tokenPrefix)})</span>`;
+    }
+  } catch {
+    el.innerHTML = '<span class="verify-fail">Could not check auth status</span>';
+  }
+}
+
+async function fmSaveToken() {
+  const token = document.getElementById('fm-api-token').value.trim();
+  if (!token) { toast('Enter your Fastmail API token'); return; }
+
+  try {
+    await api('/oauth/fastmail/credentials', {
+      method: 'POST',
+      body: { api_token: token },
+    });
+    toast('Fastmail API token saved');
+    document.getElementById('fm-api-token').value = '';
+    fmCheckStatus();
+  } catch (err) {
+    toast('Failed to save token: ' + err.message);
+  }
+}
+
+async function fmRevoke() {
+  try {
+    await api('/oauth/fastmail/revoke', { method: 'POST' });
+    toast('Fastmail token removed');
+    fmCheckStatus();
+  } catch (err) {
+    toast('Failed to remove: ' + err.message);
+  }
 }

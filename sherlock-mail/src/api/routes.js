@@ -21,6 +21,8 @@ import { Pop3Handler } from '../protocols/pop3-handler.js';
 import { EwsHandler } from '../protocols/ews-handler.js';
 import { GraphHandler } from '../protocols/graph-handler.js';
 import { GmailHandler } from '../protocols/gmail-handler.js';
+import { ZohoHandler } from '../protocols/zoho-handler.js';
+import { JmapHandler } from '../protocols/jmap-handler.js';
 import { ExportService } from '../services/export-service.js';
 import { InlineSearchEngine } from '../services/inline-search.js';
 import { QualityControlService } from '../services/quality-control.js';
@@ -30,6 +32,23 @@ import {
   getAuthStatus, getAuthUrl, saveCredentials, loadCredentials,
   startCallbackServer, waitForAuth, stopCallbackServer, revokeTokens,
 } from '../services/google-oauth.js';
+import {
+  getAuthStatus as msGetAuthStatus, getAuthUrl as msGetAuthUrl,
+  saveCredentials as msSaveCredentials,
+  startCallbackServer as msStartCallbackServer, waitForAuth as msWaitForAuth,
+  stopCallbackServer as msStopCallbackServer, revokeTokens as msRevokeTokens,
+} from '../services/microsoft-oauth.js';
+import {
+  getAuthStatus as zohoGetAuthStatus, getAuthUrl as zohoGetAuthUrl,
+  saveCredentials as zohoSaveCredentials,
+  startCallbackServer as zohoStartCallbackServer, waitForAuth as zohoWaitForAuth,
+  stopCallbackServer as zohoStopCallbackServer, revokeTokens as zohoRevokeTokens,
+} from '../services/zoho-oauth.js';
+import {
+  getAuthStatus as fmGetAuthStatus, saveCredentials as fmSaveCredentials,
+  revokeTokens as fmRevokeTokens,
+} from '../services/fastmail-auth.js';
+import { getProviders, detectProvider, getProvider, getRecommendedProtocol, getPreset } from '../services/provider-profiles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', '..', 'data');
@@ -82,6 +101,121 @@ router.get('/oauth/google/wait', async (req, res) => {
 router.post('/oauth/google/revoke', (req, res) => {
   revokeTokens();
   res.json({ success: true });
+});
+
+// ── Microsoft OAuth ──
+router.get('/oauth/microsoft/status', (req, res) => {
+  res.json(msGetAuthStatus());
+});
+
+router.post('/oauth/microsoft/credentials', (req, res) => {
+  try {
+    msSaveCredentials(req.body);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/oauth/microsoft/authorize', async (req, res) => {
+  try {
+    await msStartCallbackServer();
+    const url = msGetAuthUrl();
+    if (!url) return res.status(400).json({ error: 'Microsoft credentials not configured. Enter Client ID and Secret first.' });
+    res.json({ url });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/oauth/microsoft/wait', async (req, res) => {
+  try {
+    const result = await msWaitForAuth();
+    msStopCallbackServer();
+    res.json(result);
+  } catch (err) {
+    msStopCallbackServer();
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/oauth/microsoft/revoke', (req, res) => {
+  msRevokeTokens();
+  res.json({ success: true });
+});
+
+// ── Zoho OAuth ──
+router.get('/oauth/zoho/status', (req, res) => {
+  res.json(zohoGetAuthStatus());
+});
+
+router.post('/oauth/zoho/credentials', (req, res) => {
+  try {
+    zohoSaveCredentials(req.body);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/oauth/zoho/authorize', async (req, res) => {
+  try {
+    await zohoStartCallbackServer();
+    const url = zohoGetAuthUrl();
+    if (!url) return res.status(400).json({ error: 'Zoho credentials not configured. Enter Client ID and Secret first.' });
+    res.json({ url });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/oauth/zoho/wait', async (req, res) => {
+  try {
+    const result = await zohoWaitForAuth();
+    zohoStopCallbackServer();
+    res.json(result);
+  } catch (err) {
+    zohoStopCallbackServer();
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/oauth/zoho/revoke', (req, res) => {
+  zohoRevokeTokens();
+  res.json({ success: true });
+});
+
+// ── Fastmail Auth ──
+router.get('/oauth/fastmail/status', (req, res) => {
+  res.json(fmGetAuthStatus());
+});
+
+router.post('/oauth/fastmail/credentials', (req, res) => {
+  try {
+    fmSaveCredentials(req.body);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/oauth/fastmail/revoke', (req, res) => {
+  fmRevokeTokens();
+  res.json({ success: true });
+});
+
+// ── Provider Profiles ──
+router.get('/providers', (req, res) => {
+  res.json(getProviders());
+});
+
+router.get('/providers/detect', (req, res) => {
+  const { email } = req.query;
+  if (!email) return res.status(400).json({ error: 'Email required' });
+  const providerId = detectProvider(email);
+  const provider = getProvider(providerId);
+  const recommended = getRecommendedProtocol(providerId);
+  res.json({ providerId, provider, recommended });
 });
 
 // ── Projects ──
@@ -187,6 +321,34 @@ router.get('/protocols', (req, res) => {
         'Trash and Spam are accessible for complete collection',
       ],
     },
+    zoho: {
+      name: 'Zoho Mail API',
+      port: { secure: 443 },
+      rfc: 'Zoho REST API',
+      description: 'REST API for Zoho Mail and Zoho Workplace. Regional endpoints for US, EU, IN, AU, JP. OAuth 2.0 required.',
+      capabilities: ZohoHandler.getCapabilities(),
+      forensicNotes: [
+        'Regional API endpoints must match account region',
+        'Full message content retrieval with metadata',
+        'Attachment download via separate endpoint',
+        'Folder-based organization with search support',
+        'OAuth tokens are short-lived (1 hour) with refresh',
+      ],
+    },
+    jmap: {
+      name: 'JMAP (Fastmail)',
+      port: { secure: 443 },
+      rfc: 'RFC 8621',
+      description: 'JSON Meta Application Protocol — open standard for modern email access. Used by Fastmail. HTTP+JSON, batch method calls, efficient sync.',
+      capabilities: JmapHandler.getCapabilities(),
+      forensicNotes: [
+        'Open standard (IETF RFC 8621) — not vendor-specific',
+        'Batch method calls reduce round-trips',
+        'State tokens enable efficient incremental sync',
+        'Full message properties including headers',
+        'API token authentication (no OAuth dance required)',
+      ],
+    },
   });
 });
 
@@ -237,6 +399,22 @@ router.post('/connect/test', async (req, res) => {
         const gmailFolders = await handler.listLabels();
         await handler.disconnect();
         res.json({ ...result, folders: gmailFolders, protocolLog: handler.getProtocolLog() });
+        return;
+
+      case 'zoho_api':
+        handler = new ZohoHandler(config);
+        result = await handler.connect();
+        const zohoFolders = await handler.listFolders();
+        await handler.disconnect();
+        res.json({ ...result, folders: zohoFolders, protocolLog: handler.getProtocolLog() });
+        return;
+
+      case 'jmap':
+        handler = new JmapHandler(config);
+        result = await handler.connect();
+        const jmapFolders = await handler.listFolders();
+        await handler.disconnect();
+        res.json({ ...result, folders: jmapFolders, protocolLog: handler.getProtocolLog() });
         return;
 
       default:
@@ -380,6 +558,44 @@ router.post('/projects/:id/collect', async (req, res) => {
 
       case 'gmail_api': {
         handler = new GmailHandler(config || { email: project.target_email, authType: 'oauth2' });
+        await handler.connect();
+
+        for (const folder of targetFolders) {
+          const messages = await handler.fetchMessages(folder, { limit });
+          for (const msg of messages) {
+            if (differential && existingIds.has(msg.hashSha256)) { skippedCount++; continue; }
+            msg.projectId = project.id;
+            msg.acquisitionId = acquisitionId;
+            saveMessage(msg);
+            allMessages.push(msg);
+          }
+        }
+
+        await handler.disconnect();
+        break;
+      }
+
+      case 'zoho_api': {
+        handler = new ZohoHandler(config || { email: project.target_email });
+        await handler.connect();
+
+        for (const folder of targetFolders) {
+          const messages = await handler.fetchMessages(folder, { limit });
+          for (const msg of messages) {
+            if (differential && existingIds.has(msg.hashSha256)) { skippedCount++; continue; }
+            msg.projectId = project.id;
+            msg.acquisitionId = acquisitionId;
+            saveMessage(msg);
+            allMessages.push(msg);
+          }
+        }
+
+        await handler.disconnect();
+        break;
+      }
+
+      case 'jmap': {
+        handler = new JmapHandler(config || { email: project.target_email });
         await handler.connect();
 
         for (const folder of targetFolders) {
@@ -570,6 +786,22 @@ router.post('/projects/:id/search', async (req, res) => {
       }
       case 'gmail_api': {
         const handler = new GmailHandler({ email: project.target_email, authType: 'oauth2' });
+        await handler.connect();
+        serverResult = await handler.searchMessages(criteria);
+        serverResult.protocolLog = handler.getProtocolLog();
+        await handler.disconnect();
+        break;
+      }
+      case 'zoho_api': {
+        const handler = new ZohoHandler({ email: project.target_email });
+        await handler.connect();
+        serverResult = await handler.searchMessages(criteria);
+        serverResult.protocolLog = handler.getProtocolLog();
+        await handler.disconnect();
+        break;
+      }
+      case 'jmap': {
+        const handler = new JmapHandler({ email: project.target_email });
         await handler.connect();
         serverResult = await handler.searchMessages(criteria);
         serverResult.protocolLog = handler.getProtocolLog();

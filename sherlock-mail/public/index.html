@@ -112,7 +112,9 @@
                 <select id="proj-provider">
                   <option value="imap">IMAP</option>
                   <option value="gmail_api">Gmail API</option>
-                  <option value="graph_api">Microsoft Graph API</option>
+                  <option value="graph">Microsoft Graph API</option>
+                  <option value="zoho_api">Zoho Mail API</option>
+                  <option value="jmap">JMAP (Fastmail)</option>
                   <option value="ews">Exchange Web Services (EWS)</option>
                   <option value="pop3">POP3</option>
                 </select>
@@ -212,21 +214,40 @@
             <!-- Step 1: Connect -->
             <div class="wizard-content active" id="wiz-step-1">
               <h2>Step 1: Connection Setup</h2>
-              <p class="wizard-desc">Configure your connection to the target mailbox. Select protocol and test the connection before proceeding.</p>
+              <p class="wizard-desc">Configure your connection to the target mailbox. Select a service provider or enter the email to auto-detect the best protocol.</p>
               <div class="wizard-form">
                 <div class="form-group">
-                  <label>Protocol</label>
+                  <label>Service Provider</label>
+                  <select id="wiz-provider" onchange="wizProviderChanged()">
+                    <option value="">-- Auto-Detect from Email --</option>
+                    <option value="gmail">Gmail / Google Workspace</option>
+                    <option value="microsoft">Outlook / Microsoft 365</option>
+                    <option value="zoho">Zoho Mail</option>
+                    <option value="fastmail">Fastmail</option>
+                    <option value="yahoo">Yahoo Mail</option>
+                    <option value="aol">AOL Mail</option>
+                    <option value="icloud">iCloud Mail</option>
+                    <option value="protonmail">ProtonMail</option>
+                    <option value="yandex">Yandex Mail</option>
+                    <option value="other">Other / Custom</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Target Email Address</label>
+                  <input type="email" id="wiz-email" placeholder="target@example.com" onblur="wizAutoDetectProvider()">
+                </div>
+                <div id="wiz-provider-note" style="display:none;margin-bottom:12px;padding:10px 14px;border-radius:8px;background:var(--bg-surface);border:1px solid var(--border);font-size:13px;color:var(--text-muted)"></div>
+                <div class="form-group">
+                  <label>Collection Profile</label>
                   <select id="wiz-protocol" onchange="wizUpdateProtocolFields()">
                     <option value="imap">IMAP</option>
                     <option value="pop3">POP3</option>
                     <option value="ews">Exchange Web Services (EWS)</option>
                     <option value="graph">Microsoft Graph API</option>
                     <option value="gmail_api">Gmail API</option>
+                    <option value="zoho_api">Zoho Mail API</option>
+                    <option value="jmap">JMAP (Fastmail)</option>
                   </select>
-                </div>
-                <div class="form-group">
-                  <label>Target Email Address</label>
-                  <input type="email" id="wiz-email" placeholder="target@example.com">
                 </div>
                 <div id="wiz-protocol-fields">
                   <div class="form-row">
@@ -277,6 +298,70 @@
                         <input type="file" id="gmail-creds-file" accept=".json" onchange="gmailUploadCredentials(this)" style="display:none">
                         Upload client_secret JSON (one-time setup)
                       </label>
+                    </div>
+                  </div>
+                </div>
+                <div id="wiz-microsoft-oauth" style="display:none;margin-bottom:16px">
+                  <div style="padding:16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface)">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+                      <span id="ms-oauth-status" style="font-size:13px;color:var(--text-muted)">Checking authorization...</span>
+                    </div>
+                    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                      <button type="button" class="btn btn-primary" onclick="msAuthorize()">Authorize with Microsoft</button>
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="msCheckStatus()">Check Status</button>
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="msRevoke()" style="color:var(--error)">Revoke Access</button>
+                    </div>
+                    <div id="ms-creds-form" style="margin-top:12px">
+                      <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">One-time setup — from Azure AD App Registration:</p>
+                      <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <input type="text" id="ms-client-id" placeholder="Application (client) ID" style="flex:1;min-width:200px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px">
+                        <input type="password" id="ms-client-secret" placeholder="Client secret value" style="flex:1;min-width:200px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="msSaveCredentials()">Save</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div id="wiz-zoho-oauth" style="display:none;margin-bottom:16px">
+                  <div style="padding:16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface)">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+                      <span id="zoho-oauth-status" style="font-size:13px;color:var(--text-muted)">Checking authorization...</span>
+                    </div>
+                    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                      <button type="button" class="btn btn-primary" onclick="zohoAuthorize()">Authorize with Zoho</button>
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="zohoCheckStatus()">Check Status</button>
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="zohoRevoke()" style="color:var(--error)">Revoke Access</button>
+                    </div>
+                    <div style="margin-top:12px">
+                      <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">One-time setup — from Zoho API Console (api-console.zoho.com):</p>
+                      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+                        <input type="text" id="zoho-client-id" placeholder="Client ID" style="flex:1;min-width:200px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px">
+                        <input type="password" id="zoho-client-secret" placeholder="Client Secret" style="flex:1;min-width:200px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px">
+                      </div>
+                      <div style="display:flex;gap:8px;align-items:center">
+                        <select id="zoho-region" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px">
+                          <option value="us">US (.com)</option>
+                          <option value="eu">EU (.eu)</option>
+                          <option value="in">India (.in)</option>
+                          <option value="au">Australia (.com.au)</option>
+                          <option value="jp">Japan (.jp)</option>
+                        </select>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="zohoSaveCredentials()">Save</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div id="wiz-fastmail-auth" style="display:none;margin-bottom:16px">
+                  <div style="padding:16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface)">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+                      <span id="fm-auth-status" style="font-size:13px;color:var(--text-muted)">Checking API token...</span>
+                    </div>
+                    <div style="margin-top:8px">
+                      <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Generate an API token in Fastmail: Settings &gt; Privacy &amp; Security &gt; API tokens</p>
+                      <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <input type="password" id="fm-api-token" placeholder="Fastmail API token" style="flex:1;min-width:280px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="fmSaveToken()">Save Token</button>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="fmRevoke()" style="color:var(--error)">Remove</button>
+                      </div>
                     </div>
                   </div>
                 </div>
