@@ -1,5 +1,0 @@
----
-source: crates/core/tests/un_object_rest_rule.rs
-expression: output
----
-const { enabled = true, ...rest } = obj;

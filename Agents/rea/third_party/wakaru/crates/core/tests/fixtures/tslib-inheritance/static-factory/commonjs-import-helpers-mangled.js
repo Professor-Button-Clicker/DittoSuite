@@ -1,1 +1,0 @@
-Object.defineProperty(exports,"__esModule",{value:!0}),exports.Child=void 0;var e=require("tslib"),t=function(t){function r(){return null!==t&&t.apply(this,arguments)||this}return e.__extends(r,t),r.make=function(e){return new r(e)},r}(Parent);exports.Child=t;

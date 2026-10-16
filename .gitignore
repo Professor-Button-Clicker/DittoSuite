@@ -20,3 +20,7 @@ DerivedData/
 
 # Build artifacts
 build/
+
+# Agents (tracked separately, not in tools repos)
+Agents/
+scripts/

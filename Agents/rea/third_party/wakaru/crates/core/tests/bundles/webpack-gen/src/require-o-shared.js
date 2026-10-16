@@ -1,1 +1,0 @@
-exports.sharedValue = 'shared';

@@ -1,7 +1,0 @@
-{
-  "name": "wakaru-closure-compiler-20240317-toolchain",
-  "private": true,
-  "devDependencies": {
-    "google-closure-compiler": "20240317.0.0"
-  }
-}
