@@ -929,6 +929,101 @@ router.get('/timestamp/info', (req, res) => {
   res.json(TimestampService.getInfo());
 });
 
+// ── Analytics: Timeline ──
+router.get('/projects/:id/analytics/timeline', (req, res) => {
+  const project = getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const messages = getAllProjectMessages(project.id);
+  const buckets = {};
+  const hourBuckets = new Array(24).fill(0);
+  const dayOfWeekBuckets = new Array(7).fill(0);
+
+  for (const msg of messages) {
+    if (!msg.date) continue;
+    const d = new Date(msg.date);
+    if (isNaN(d.getTime())) continue;
+
+    const dateKey = d.toISOString().substring(0, 10);
+    if (!buckets[dateKey]) buckets[dateKey] = { date: dateKey, count: 0, sent: 0, received: 0, totalSize: 0 };
+    buckets[dateKey].count++;
+    buckets[dateKey].totalSize += msg.size || 0;
+
+    const fromAddr = (msg.from_address || '').toLowerCase();
+    const targetEmail = (project.target_email || '').toLowerCase();
+    if (fromAddr.includes(targetEmail)) buckets[dateKey].sent++;
+    else buckets[dateKey].received++;
+
+    hourBuckets[d.getHours()]++;
+    dayOfWeekBuckets[d.getDay()]++;
+  }
+
+  const timeline = Object.values(buckets).sort((a, b) => a.date.localeCompare(b.date));
+
+  res.json({
+    timeline,
+    hourDistribution: hourBuckets,
+    dayOfWeekDistribution: dayOfWeekBuckets,
+    totalMessages: messages.length,
+    dateRange: timeline.length > 0
+      ? { from: timeline[0].date, to: timeline[timeline.length - 1].date }
+      : null,
+  });
+});
+
+// ── Analytics: Relationships ──
+router.get('/projects/:id/analytics/relationships', (req, res) => {
+  const project = getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const messages = getAllProjectMessages(project.id);
+  const pairMap = {};
+  const contactMap = {};
+
+  for (const msg of messages) {
+    const from = (msg.from_address || '').toLowerCase().trim();
+    if (!from) continue;
+
+    if (!contactMap[from]) contactMap[from] = { address: from, sent: 0, received: 0, totalMessages: 0 };
+    contactMap[from].sent++;
+    contactMap[from].totalMessages++;
+
+    let toAddrs = msg.to_addresses || '[]';
+    if (typeof toAddrs === 'string') {
+      try { toAddrs = JSON.parse(toAddrs); } catch { toAddrs = [toAddrs]; }
+    }
+    const ccAddrs = msg.cc_addresses ? (typeof msg.cc_addresses === 'string' ? (() => { try { return JSON.parse(msg.cc_addresses); } catch { return [msg.cc_addresses]; } })() : msg.cc_addresses) : [];
+
+    const allRecipients = [...(Array.isArray(toAddrs) ? toAddrs : [toAddrs]), ...(Array.isArray(ccAddrs) ? ccAddrs : [])];
+
+    for (const to of allRecipients) {
+      const toAddr = (to || '').toLowerCase().trim();
+      if (!toAddr) continue;
+
+      if (!contactMap[toAddr]) contactMap[toAddr] = { address: toAddr, sent: 0, received: 0, totalMessages: 0 };
+      contactMap[toAddr].received++;
+      contactMap[toAddr].totalMessages++;
+
+      const key = [from, toAddr].sort().join('|||');
+      if (!pairMap[key]) pairMap[key] = { source: from, target: toAddr, count: 0, subjects: [] };
+      pairMap[key].count++;
+      if (pairMap[key].subjects.length < 5 && msg.subject) {
+        pairMap[key].subjects.push(msg.subject);
+      }
+    }
+  }
+
+  const pairs = Object.values(pairMap).sort((a, b) => b.count - a.count);
+  const contacts = Object.values(contactMap).sort((a, b) => b.totalMessages - a.totalMessages);
+
+  res.json({
+    pairs: pairs.slice(0, 100),
+    contacts: contacts.slice(0, 50),
+    totalPairs: pairs.length,
+    totalContacts: contacts.length,
+  });
+});
+
 // ── Export ──
 router.get('/export/formats', (req, res) => {
   res.json(ExportService.getFormats());

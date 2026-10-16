@@ -105,7 +105,7 @@ function updateSidebar() {
 // --- Forensics Sub-tabs ---
 function switchForensicsTab(subtab) {
   document.querySelectorAll('#forensics-sub-tabs .sub-tab').forEach(t => t.classList.toggle('active', t.dataset.subtab === subtab));
-  ['qc', 'cloud', 'timestamps', 'integrity'].forEach(s => {
+  ['qc', 'cloud', 'timestamps', 'integrity', 'timeline', 'relationships'].forEach(s => {
     const el = document.getElementById(`forensics-${s}`);
     if (el) el.classList.toggle('active', s === subtab);
   });
@@ -392,15 +392,75 @@ async function globalSearch() {
   }
 }
 
-async function runAdvancedSearch() {
-  const query = document.getElementById('adv-search-input').value;
-  if (!query || !currentProject) {
-    toast('Select a project and enter a search query');
-    return;
+function buildAdvancedQuery() {
+  let parts = [];
+  const base = document.getElementById('adv-search-input').value.trim();
+  if (base) parts.push(base);
+
+  const from = document.getElementById('adv-from').value.trim();
+  if (from) parts.push(`from:${from}`);
+
+  const to = document.getElementById('adv-to').value.trim();
+  if (to) parts.push(`to:${to}`);
+
+  const subject = document.getElementById('adv-subject').value.trim();
+  if (subject) parts.push(subject.includes(' ') ? `subject:"${subject}"` : `subject:${subject}`);
+
+  const dateFrom = document.getElementById('adv-date-from').value;
+  const dateTo = document.getElementById('adv-date-to').value;
+  if (dateFrom && dateTo) {
+    parts.push(`sent:[${dateFrom.replace(/-/g, '/')} TO ${dateTo.replace(/-/g, '/')}]`);
+  } else if (dateFrom) {
+    parts.push(`sent:[${dateFrom.replace(/-/g, '/')} TO 2099/12/31]`);
+  } else if (dateTo) {
+    parts.push(`sent:[2000/01/01 TO ${dateTo.replace(/-/g, '/')}]`);
   }
+
+  const hasAttachments = document.getElementById('adv-has-attachments').checked;
+  if (hasAttachments) parts.push('attachmentcount:[1 TO 9999]');
+
+  const minSize = parseInt(document.getElementById('adv-min-size').value);
+  if (minSize > 0) parts.push(`size:[${minSize * 1024} TO 999999999]`);
+
+  return parts.join(' ');
+}
+
+function clearAdvancedSearch() {
+  document.getElementById('adv-search-input').value = '';
+  document.getElementById('adv-from').value = '';
+  document.getElementById('adv-to').value = '';
+  document.getElementById('adv-subject').value = '';
+  document.getElementById('adv-date-from').value = '';
+  document.getElementById('adv-date-to').value = '';
+  document.getElementById('adv-min-size').value = '';
+  document.getElementById('adv-has-attachments').checked = false;
+  document.getElementById('adv-encrypted').checked = false;
+  document.getElementById('search-results').innerHTML = '';
+}
+
+function insertBoolOp(op) {
+  const input = document.getElementById('adv-search-input');
+  const pos = input.selectionStart || input.value.length;
+  const before = input.value.substring(0, pos);
+  const after = input.value.substring(pos);
+  input.value = `${before} ${op} ${after}`;
+  input.focus();
+  input.setSelectionRange(pos + op.length + 2, pos + op.length + 2);
+}
+
+async function runAdvancedSearch() {
+  if (!currentProject) { toast('Select a project first'); return; }
+
+  const query = buildAdvancedQuery();
+  if (!query) { toast('Enter search criteria'); return; }
 
   try {
     const results = await api(`/projects/${currentProject.id}/inline-search`, { method: 'POST', body: { query } });
+    const encrypted = document.getElementById('adv-encrypted').checked;
+    if (encrypted && results.results) {
+      results.results = results.results.filter(m => m.is_encrypted || m.is_signed);
+      results.stats.matched = results.results.length;
+    }
     renderInlineSearchResults(results, query);
   } catch (err) {
     toast('Search failed: ' + err.message);
@@ -815,6 +875,174 @@ function renderIntegrityResults(result) {
   }
 
   el.innerHTML = html;
+}
+
+// ============================================================
+// FORENSICS: Timeline Analysis
+// ============================================================
+
+async function loadTimeline() {
+  if (!currentProject) { toast('Select a project first'); return; }
+  const statusEl = document.getElementById('timeline-status');
+  statusEl.innerHTML = '<span style="color:var(--accent)">Loading timeline...</span>';
+
+  try {
+    const data = await api(`/projects/${currentProject.id}/analytics/timeline`);
+    statusEl.innerHTML = '';
+    renderTimeline(data);
+  } catch (err) {
+    statusEl.innerHTML = `<span class="verify-fail">Failed: ${esc(err.message)}</span>`;
+  }
+}
+
+function renderTimeline(data) {
+  const el = document.getElementById('timeline-results');
+  const tl = data.timeline || [];
+  const range = data.dateRange;
+
+  if (tl.length === 0) {
+    el.innerHTML = '<div class="empty-state" style="height:200px"><h3>No dated messages to chart</h3><p>Collect messages first.</p></div>';
+    return;
+  }
+
+  const maxCount = Math.max(...tl.map(d => d.count));
+  const barChart = tl.map(d => {
+    const pct = maxCount > 0 ? (d.count / maxCount * 100) : 0;
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:2px" title="${d.date}: ${d.count} messages (${formatBytes(d.totalSize)})">
+      <span style="min-width:80px;font-size:11px;font-family:var(--font-mono);color:var(--text-muted)">${d.date}</span>
+      <div style="flex:1;height:18px;background:var(--bg-surface);border-radius:3px;overflow:hidden">
+        <div style="height:100%;border-radius:3px;display:flex;align-items:center">
+          <div style="height:100%;background:var(--accent);border-radius:3px;width:${pct}%;min-width:${d.count > 0 ? 2 : 0}px"></div>
+          ${d.sent > 0 ? `<div style="height:100%;background:var(--success);border-radius:0 3px 3px 0;width:${d.sent / d.count * pct}%;min-width:1px" title="${d.sent} sent"></div>` : ''}
+        </div>
+      </div>
+      <span style="min-width:35px;text-align:right;font-size:12px;font-weight:500;color:var(--text-primary)">${d.count}</span>
+    </div>`;
+  }).join('');
+
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const maxDay = Math.max(...data.dayOfWeekDistribution);
+  const dowChart = data.dayOfWeekDistribution.map((count, i) => {
+    const pct = maxDay > 0 ? (count / maxDay * 100) : 0;
+    return `<div style="text-align:center;flex:1">
+      <div style="height:60px;display:flex;align-items:flex-end;justify-content:center">
+        <div style="width:24px;background:var(--accent);border-radius:3px 3px 0 0;height:${pct}%;min-height:${count > 0 ? 2 : 0}px"></div>
+      </div>
+      <div style="font-size:11px;margin-top:4px;color:var(--text-muted)">${dayNames[i]}</div>
+      <div style="font-size:10px;color:var(--text-secondary)">${count}</div>
+    </div>`;
+  }).join('');
+
+  const maxHour = Math.max(...data.hourDistribution);
+  const hourChart = data.hourDistribution.map((count, i) => {
+    const pct = maxHour > 0 ? (count / maxHour * 100) : 0;
+    return `<div style="text-align:center;flex:1;min-width:0">
+      <div style="height:50px;display:flex;align-items:flex-end;justify-content:center">
+        <div style="width:100%;max-width:16px;background:var(--accent);border-radius:2px 2px 0 0;height:${pct}%;min-height:${count > 0 ? 1 : 0}px"></div>
+      </div>
+      <div style="font-size:9px;color:var(--text-muted)">${i}</div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-label">Total Messages</div><div class="stat-value">${data.totalMessages}</div></div>
+      <div class="stat-card"><div class="stat-label">Date Range</div><div class="stat-value" style="font-size:14px;font-family:var(--font-mono)">${range ? `${range.from} — ${range.to}` : 'N/A'}</div></div>
+      <div class="stat-card"><div class="stat-label">Active Days</div><div class="stat-value">${tl.length}</div></div>
+      <div class="stat-card"><div class="stat-label">Avg/Day</div><div class="stat-value">${tl.length > 0 ? (data.totalMessages / tl.length).toFixed(1) : 0}</div></div>
+    </div>
+
+    <h3 style="margin:20px 0 12px;font-size:14px">Daily Volume</h3>
+    <div style="max-height:400px;overflow-y:auto;padding-right:8px">${barChart}</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:24px">
+      <div>
+        <h3 style="margin:0 0 12px;font-size:14px">Day of Week</h3>
+        <div style="display:flex;gap:4px;padding:8px;background:var(--bg-surface);border-radius:var(--radius)">${dowChart}</div>
+      </div>
+      <div>
+        <h3 style="margin:0 0 12px;font-size:14px">Hour of Day (0-23)</h3>
+        <div style="display:flex;gap:1px;padding:8px;background:var(--bg-surface);border-radius:var(--radius)">${hourChart}</div>
+      </div>
+    </div>
+  `;
+}
+
+// ============================================================
+// FORENSICS: Relationship Analysis
+// ============================================================
+
+async function loadRelationships() {
+  if (!currentProject) { toast('Select a project first'); return; }
+  const statusEl = document.getElementById('relationships-status');
+  statusEl.innerHTML = '<span style="color:var(--accent)">Analyzing...</span>';
+
+  try {
+    const data = await api(`/projects/${currentProject.id}/analytics/relationships`);
+    statusEl.innerHTML = '';
+    renderRelationships(data);
+  } catch (err) {
+    statusEl.innerHTML = `<span class="verify-fail">Failed: ${esc(err.message)}</span>`;
+  }
+}
+
+function renderRelationships(data) {
+  const el = document.getElementById('relationships-results');
+  const contacts = data.contacts || [];
+  const pairs = data.pairs || [];
+
+  if (contacts.length === 0) {
+    el.innerHTML = '<div class="empty-state" style="height:200px"><h3>No contacts found</h3><p>Collect messages first.</p></div>';
+    return;
+  }
+
+  const maxMsgs = Math.max(...contacts.slice(0, 20).map(c => c.totalMessages));
+
+  const contactRows = contacts.slice(0, 20).map(c => {
+    const pct = maxMsgs > 0 ? (c.totalMessages / maxMsgs * 100) : 0;
+    const sentPct = c.totalMessages > 0 ? (c.sent / c.totalMessages * 100) : 0;
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+      <span style="min-width:200px;max-width:200px;font-size:12px;font-family:var(--font-mono);color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(c.address)}">${esc(c.address)}</span>
+      <div style="flex:1;height:20px;background:var(--bg-surface);border-radius:3px;overflow:hidden;display:flex">
+        <div style="height:100%;background:var(--accent);width:${sentPct * pct / 100}%;min-width:${c.sent > 0 ? 1 : 0}px" title="${c.sent} sent"></div>
+        <div style="height:100%;background:var(--success);width:${(100 - sentPct) * pct / 100}%;min-width:${c.received > 0 ? 1 : 0}px" title="${c.received} received"></div>
+      </div>
+      <span style="min-width:80px;text-align:right;font-size:11px;color:var(--text-muted)">${c.sent}s / ${c.received}r</span>
+      <span style="min-width:35px;text-align:right;font-size:12px;font-weight:500;color:var(--text-primary)">${c.totalMessages}</span>
+    </div>`;
+  }).join('');
+
+  const pairRows = pairs.slice(0, 30).map(p => `
+    <tr>
+      <td style="font-family:var(--font-mono);font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.source)}">${esc(p.source)}</td>
+      <td style="text-align:center;color:var(--accent)">&#8596;</td>
+      <td style="font-family:var(--font-mono);font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.target)}">${esc(p.target)}</td>
+      <td style="text-align:center;font-weight:600;color:var(--text-primary)">${p.count}</td>
+      <td style="font-size:11px;color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc((p.subjects || []).join(', '))}">${esc((p.subjects || [])[0] || '')}</td>
+    </tr>
+  `).join('');
+
+  el.innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-label">Unique Contacts</div><div class="stat-value">${data.totalContacts}</div></div>
+      <div class="stat-card"><div class="stat-label">Communication Pairs</div><div class="stat-value">${data.totalPairs}</div></div>
+      <div class="stat-card"><div class="stat-label">Top Contact</div><div class="stat-value" style="font-size:13px;font-family:var(--font-mono)">${esc(contacts[0]?.address || 'N/A')}</div></div>
+      <div class="stat-card"><div class="stat-label">Busiest Pair</div><div class="stat-value">${pairs[0]?.count || 0} msgs</div></div>
+    </div>
+
+    <h3 style="margin:20px 0 12px;font-size:14px">Top Contacts</h3>
+    <div style="display:flex;gap:8px;margin-bottom:8px;font-size:11px;color:var(--text-muted)">
+      <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:var(--accent)"></span>Sent</span>
+      <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;border-radius:2px;background:var(--success)"></span>Received</span>
+    </div>
+    <div style="max-height:350px;overflow-y:auto">${contactRows}</div>
+
+    <h3 style="margin:24px 0 12px;font-size:14px">Top Communication Pairs</h3>
+    <table class="audit-table">
+      <thead><tr><th>Contact A</th><th></th><th>Contact B</th><th>Count</th><th>Sample Subject</th></tr></thead>
+      <tbody>${pairRows}</tbody>
+    </table>
+  `;
 }
 
 // ============================================================

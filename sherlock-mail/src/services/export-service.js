@@ -61,6 +61,26 @@ export class ExportService {
         limitations: ['Same as EML - one file per message'],
         usedBy: ['Forensic tools', 'Raw protocol captures'],
       },
+      pdf: {
+        name: 'PDF Report',
+        extension: '.html',
+        mimeType: 'text/html',
+        description: 'Printable HTML report with full message metadata, headers, body text, and forensic hashes. Open in a browser and print/save as PDF for court-ready documentation.',
+        forensicValue: 'MEDIUM',
+        preserves: ['Message metadata', 'Body text', 'Hash values', 'Chain of custody reference'],
+        limitations: ['HTML source — print to PDF for final output', 'Attachments listed but not embedded'],
+        usedBy: ['Court submissions', 'Case documentation', 'Client reports'],
+      },
+      concordance: {
+        name: 'Concordance DAT (Load File)',
+        extension: '.dat',
+        mimeType: 'text/plain',
+        description: 'Concordance-compatible delimited load file for eDiscovery review platforms. Uses standard þ (thorn) delimiter and ð (eth) text qualifier. Includes OPT cross-reference file.',
+        forensicValue: 'HIGH',
+        preserves: ['All metadata fields', 'Hash values', 'Folder paths', 'Date/time stamps'],
+        limitations: ['Body text truncated to 32KB per field', 'Attachments referenced but not inline'],
+        usedBy: ['Relativity', 'Concordance', 'Ringtail', 'Summation', 'IPRO'],
+      },
     };
   }
 
@@ -119,6 +139,27 @@ export class ExportService {
           fs.writeFileSync(filePath, result.content, 'utf8');
           files.push({ ...result, path: filePath, relativePath: result.filename });
         }
+        break;
+      }
+
+      case 'pdf': {
+        const result = this.generatePdfReport(messages, projectId);
+        const filePath = path.join(outputDir, result.filename);
+        fs.writeFileSync(filePath, result.content, 'utf8');
+        files.push({ ...result, path: filePath, relativePath: result.filename });
+        break;
+      }
+
+      case 'concordance': {
+        const datResult = this.generateConcordanceDat(messages);
+        const datPath = path.join(outputDir, datResult.filename);
+        fs.writeFileSync(datPath, datResult.content, 'utf8');
+        files.push({ ...datResult, path: datPath, relativePath: datResult.filename });
+
+        const optResult = this.generateConcordanceOpt(messages, projectId);
+        const optPath = path.join(outputDir, optResult.filename);
+        fs.writeFileSync(optPath, optResult.content, 'utf8');
+        files.push({ ...optResult, path: optPath, relativePath: optResult.filename });
         break;
       }
     }
@@ -348,6 +389,121 @@ export class ExportService {
     return parts;
   }
 
+  static generatePdfReport(messages, projectId) {
+    const now = new Date().toISOString();
+    const rows = messages.map((msg, i) => {
+      const from = msg.from_address || msg.fromAddress || '';
+      const to = parseJsonField(msg.to_addresses || msg.toAddresses, []);
+      const cc = parseJsonField(msg.cc_addresses || msg.ccAddresses, []);
+      const subject = msg.subject || '(no subject)';
+      const date = msg.date ? new Date(msg.date).toLocaleString() : 'Unknown';
+      const body = (msg.body_text || msg.bodyText || '').substring(0, 8000);
+      const sha256 = msg.hash_sha256 || msg.hashSha256 || 'N/A';
+
+      return `<div class="msg" style="page-break-inside:avoid;border:1px solid #ccc;padding:16px;margin-bottom:16px;border-radius:4px">
+        <h3 style="margin:0 0 8px">#${i + 1}: ${escHtml(subject)}</h3>
+        <table style="width:100%;font-size:13px;border-collapse:collapse">
+          <tr><td style="width:80px;font-weight:bold;padding:2px 8px">From:</td><td>${escHtml(from)}</td></tr>
+          <tr><td style="font-weight:bold;padding:2px 8px">To:</td><td>${escHtml(Array.isArray(to) ? to.join(', ') : to)}</td></tr>
+          ${cc.length ? `<tr><td style="font-weight:bold;padding:2px 8px">Cc:</td><td>${escHtml(Array.isArray(cc) ? cc.join(', ') : cc)}</td></tr>` : ''}
+          <tr><td style="font-weight:bold;padding:2px 8px">Date:</td><td>${escHtml(date)}</td></tr>
+          <tr><td style="font-weight:bold;padding:2px 8px">SHA-256:</td><td style="font-family:monospace;font-size:11px">${escHtml(sha256)}</td></tr>
+          <tr><td style="font-weight:bold;padding:2px 8px">Folder:</td><td>${escHtml(msg.folder || '')}</td></tr>
+        </table>
+        ${body ? `<div style="margin-top:12px;padding:12px;background:#f5f5f5;border-radius:4px;font-size:13px;white-space:pre-wrap;max-height:400px;overflow:auto">${escHtml(body)}</div>` : ''}
+      </div>`;
+    }).join('\n');
+
+    const content = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>SherlockMail Forensic Export — ${escHtml(projectId)}</title>
+<style>body{font-family:Arial,sans-serif;max-width:900px;margin:0 auto;padding:20px;color:#222}
+h1{border-bottom:2px solid #1a56db;padding-bottom:8px}
+.meta{font-size:13px;color:#666;margin-bottom:24px}
+@media print{.msg{page-break-inside:avoid}}</style></head>
+<body>
+<h1>SherlockMail Forensic Email Report</h1>
+<div class="meta">
+  <div>Project: ${escHtml(projectId)} | Generated: ${now} | Messages: ${messages.length}</div>
+  <div>Tool: SherlockMail v0.9.0 | Hash Algorithm: SHA-256</div>
+</div>
+${rows}
+<div style="margin-top:32px;padding-top:16px;border-top:1px solid #ccc;font-size:12px;color:#999">
+  Generated by SherlockMail v0.9.0 — FEC-grade forensic email collection tool<br>
+  This report is intended for print-to-PDF. Hash values above can be independently verified against the collection database.
+</div>
+</body></html>`;
+
+    return {
+      content,
+      filename: `report_${new Date().toISOString().replace(/[:.]/g, '-')}.html`,
+      hash: crypto.createHash('sha256').update(content).digest('hex'),
+      size: Buffer.byteLength(content),
+      messageCount: messages.length,
+    };
+  }
+
+  static generateConcordanceDat(messages) {
+    const D = 'þ'; // þ (thorn) — Concordance field delimiter
+    const Q = 'ð'; // ð (eth) — Concordance text qualifier
+
+    const fields = [
+      'DOCID', 'FROM', 'TO', 'CC', 'BCC', 'SUBJECT', 'DATESENT', 'TIMESENT',
+      'FOLDER', 'HASATTACHMENTS', 'ATTACHCOUNT', 'MESSAGESIZE', 'MESSAGEID',
+      'HASHMD5', 'HASHSHA256', 'BODYTEXT',
+    ];
+
+    const header = fields.map(f => `${Q}${f}${Q}`).join(D);
+
+    const rows = messages.map(msg => {
+      const from = msg.from_address || msg.fromAddress || '';
+      const to = parseJsonField(msg.to_addresses || msg.toAddresses, []).join('; ');
+      const cc = parseJsonField(msg.cc_addresses || msg.ccAddresses, []).join('; ');
+      const bcc = parseJsonField(msg.bcc_addresses || msg.bccAddresses, []).join('; ');
+      const subject = msg.subject || '';
+      const d = msg.date ? new Date(msg.date) : null;
+      const dateSent = d ? `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}` : '';
+      const timeSent = d ? d.toTimeString().substring(0, 8) : '';
+      const folder = msg.folder || '';
+      const hasAtt = msg.has_attachments || msg.hasAttachments ? 'TRUE' : 'FALSE';
+      const attCount = msg.attachment_count || msg.attachmentCount || 0;
+      const size = msg.size || 0;
+      const msgId = msg.message_id || msg.messageId || '';
+      const md5 = msg.hash_md5 || msg.hashMd5 || '';
+      const sha256 = msg.hash_sha256 || msg.hashSha256 || '';
+      const body = (msg.body_text || msg.bodyText || '').substring(0, 32000).replace(/[\r\n]+/g, ' ');
+
+      const vals = [msg.id, from, to, cc, bcc, subject, dateSent, timeSent,
+        folder, hasAtt, attCount, size, msgId, md5, sha256, body];
+      return vals.map(v => `${Q}${String(v ?? '').replace(/ð/g, '')}${Q}`).join(D);
+    });
+
+    const content = [header, ...rows].join('\r\n') + '\r\n';
+    return {
+      content,
+      filename: `loadfile_${new Date().toISOString().replace(/[:.]/g, '-')}.dat`,
+      hash: crypto.createHash('sha256').update(content).digest('hex'),
+      size: Buffer.byteLength(content),
+      messageCount: messages.length,
+    };
+  }
+
+  static generateConcordanceOpt(messages, projectId) {
+    const lines = messages.map((msg, i) => {
+      const docId = msg.id || `DOC_${i + 1}`;
+      const volume = projectId.substring(0, 8);
+      const imgPath = '';
+      return `${docId},${volume},${imgPath},Y,,,${i + 1}`;
+    });
+
+    const content = lines.join('\r\n') + '\r\n';
+    return {
+      content,
+      filename: `loadfile_${new Date().toISOString().replace(/[:.]/g, '-')}.opt`,
+      hash: crypto.createHash('sha256').update(content).digest('hex'),
+      size: Buffer.byteLength(content),
+    };
+  }
+
   static generateHashManifest(exportedFiles) {
     const manifest = {
       generated: new Date().toISOString(),
@@ -429,6 +585,10 @@ function sanitizeFilename(name) {
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
     .replace(/\s+/g, '_')
     .substring(0, 60);
+}
+
+function escHtml(str) {
+  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function parseJsonField(value, fallback) {
