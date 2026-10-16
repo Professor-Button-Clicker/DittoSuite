@@ -350,17 +350,18 @@ async function detectEmailProvider() {
   el.innerHTML = '<span style="color:var(--text-muted)">Detecting provider...</span>';
 
   try {
-    const result = await api('/detect-provider', { method: 'POST', body: { email } });
+    const result = await api(`/providers/detect?email=${encodeURIComponent(email)}`);
 
-    if (result.profile) {
-      document.getElementById('proj-provider').value = result.profile.type || 'imap';
+    if (result.provider) {
+      const rec = result.recommended;
+      document.getElementById('proj-provider').value = rec?.protocol || 'imap';
+      const preset = rec?.preset || {};
       el.innerHTML = `
         <div class="provider-result">
-          <div class="provider-name">${esc(result.profile.name)}</div>
-          <div class="provider-detail">Detection method: ${result.method} | Type: ${result.profile.type}</div>
-          ${result.profile.supportsOAuth ? '<div class="provider-detail" style="color:var(--success)">Supports OAuth 2.0</div>' : ''}
-          ${result.profile.requiresAppPassword ? '<div class="provider-detail" style="color:var(--warning)">Requires app-specific password</div>' : ''}
-          <div class="provider-detail">IMAP: ${result.profile.imap?.host}:${result.profile.imap?.port}</div>
+          <div class="provider-name">${esc(result.provider.name)}</div>
+          <div class="provider-detail">Recommended: ${rec?.protocol || 'imap'} | OAuth: ${result.provider.oauthRequired ? 'Required' : 'Optional'}</div>
+          ${result.provider.notes ? `<div class="provider-detail">${esc(result.provider.notes)}</div>` : ''}
+          ${preset.host ? `<div class="provider-detail">IMAP: ${preset.host}:${preset.port || 993}</div>` : ''}
         </div>`;
     } else {
       el.innerHTML = '<span style="color:var(--danger)">Could not detect provider</span>';
