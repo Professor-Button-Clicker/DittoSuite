@@ -58,7 +58,7 @@ const router = Router();
 // ── Dashboard Stats ──
 router.get('/stats', (req, res) => {
   const stats = getStats();
-  stats.version = '2.1.0';
+  stats.version = '0.9.0';
   res.json(stats);
 });
 
@@ -1057,7 +1057,7 @@ router.get('/projects/:id/verify', (req, res) => {
 
   const verification = {
     timestamp: new Date().toISOString(),
-    toolVersion: '2.1.0',
+    toolVersion: '0.9.0',
     projectId: req.params.id,
     projectName: project.name,
     examiner: project.examiner_name,
