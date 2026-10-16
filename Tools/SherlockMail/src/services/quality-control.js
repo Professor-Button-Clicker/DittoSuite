@@ -15,6 +15,8 @@ export class QualityControlService {
     checks.push(this.checkExportCompleteness(messages, exports));
     checks.push(this.checkAuditTrail(project));
     checks.push(this.checkEncryptionDetection(messages));
+    checks.push(this.checkWriteProtection(project));
+    checks.push(this.checkStandardsCompliance(project, messages, acquisitions));
 
     const elapsed = Date.now() - startTime;
     const passed = checks.filter(c => c.status === 'pass').length;
@@ -242,6 +244,62 @@ export class QualityControlService {
     check.detail = encrypted > 0
       ? `${encrypted} encrypted, ${signed} signed message(s) — encrypted content may not be fully preserved`
       : `${signed} signed message(s) detected, no encrypted messages`;
+    return check;
+  }
+
+  static checkWriteProtection(project) {
+    const check = { name: 'Write Protection (ISO 27037)', category: 'forensic' };
+    const protocol = project.provider_type || '';
+    const readOnlyProtocols = ['imap', 'gmail_api', 'graph', 'zoho_api', 'jmap'];
+    const isReadOnly = readOnlyProtocols.includes(protocol);
+
+    check.metrics = { protocol, readOnlyAccess: isReadOnly };
+
+    if (protocol === 'imap') {
+      check.status = 'pass';
+      check.detail = 'IMAP EXAMINE mode provides read-only access (ISO 27037 / ACPO Principle 1)';
+    } else if (isReadOnly) {
+      check.status = 'pass';
+      check.detail = `${protocol.toUpperCase()} API uses read-only scopes — no write operations performed`;
+    } else if (protocol === 'pop3') {
+      check.status = 'warning';
+      check.detail = 'POP3 RETR may cause message deletion on some servers — document server behavior per SWGDE guidelines';
+    } else if (protocol === 'ews') {
+      check.status = 'pass';
+      check.detail = 'EWS read operations do not modify mailbox content';
+    } else {
+      check.status = 'warning';
+      check.detail = 'Unknown protocol — verify that collection did not alter source data';
+    }
+    return check;
+  }
+
+  static checkStandardsCompliance(project, messages, acquisitions) {
+    const check = { name: 'DFIR Standards Compliance', category: 'forensic' };
+    const issues = [];
+
+    if (!project.examiner_name) issues.push('No examiner name (ACPO Principle 2, ISO 27037)');
+    if (!project.legal_authority) issues.push('No legal authority documented (SWGDE, FRE 901)');
+    if (!project.case_id && !project.case_name) issues.push('No case identifier (SWGDE evidence tracking)');
+
+    const hasHash = messages.some(m => m.hash_sha256);
+    if (!hasHash && messages.length > 0) issues.push('No SHA-256 hashes on collected messages (NIST FIPS 180-4)');
+
+    const hasAcquisition = acquisitions && acquisitions.length > 0;
+    if (!hasAcquisition && messages.length > 0) issues.push('No acquisition record (NIST SP 800-86 collection phase)');
+
+    check.metrics = { issues: issues.length, checks: 5 };
+
+    if (issues.length === 0) {
+      check.status = 'pass';
+      check.detail = 'All DFIR documentation requirements met (ISO 27037, NIST SP 800-86, SWGDE, ACPO, FRE)';
+    } else if (issues.length <= 2) {
+      check.status = 'warning';
+      check.detail = issues.join('; ');
+    } else {
+      check.status = 'fail';
+      check.detail = issues.join('; ');
+    }
     return check;
   }
 }

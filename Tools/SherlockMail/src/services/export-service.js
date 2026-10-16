@@ -81,6 +81,16 @@ export class ExportService {
         limitations: ['Body text truncated to 32KB per field', 'Attachments referenced but not inline'],
         usedBy: ['Relativity', 'Concordance', 'Ringtail', 'Summation', 'IPRO'],
       },
+      xml: {
+        name: 'XML (Structured)',
+        extension: '.xml',
+        mimeType: 'application/xml',
+        description: 'Structured XML export with full message metadata, headers, body content, and forensic hashes. Well-suited for programmatic ingestion, XSLT transformation, and integration with case management systems.',
+        forensicValue: 'HIGH',
+        preserves: ['Full metadata', 'Hash values', 'Folder structure', 'Body content', 'Attachment references'],
+        limitations: ['Larger file size than delimited formats', 'Binary attachments not embedded (base64 would inflate size)'],
+        usedBy: ['Case management systems', 'Custom forensic pipelines', 'XSLT workflows', 'Database imports'],
+      },
     };
   }
 
@@ -160,6 +170,14 @@ export class ExportService {
         const optPath = path.join(outputDir, optResult.filename);
         fs.writeFileSync(optPath, optResult.content, 'utf8');
         files.push({ ...optResult, path: optPath, relativePath: optResult.filename });
+        break;
+      }
+
+      case 'xml': {
+        const xmlResult = this.generateXml(messages, projectId);
+        const xmlPath = path.join(outputDir, xmlResult.filename);
+        fs.writeFileSync(xmlPath, xmlResult.content, 'utf8');
+        files.push({ ...xmlResult, path: xmlPath, relativePath: xmlResult.filename });
         break;
       }
     }
@@ -516,6 +534,65 @@ ${rows}
       filename: `loadfile_${new Date().toISOString().replace(/[:.]/g, '-')}.opt`,
       hash: crypto.createHash('sha256').update(content).digest('hex'),
       size: Buffer.byteLength(content),
+    };
+  }
+
+  static generateXml(messages, projectId) {
+    const now = new Date().toISOString();
+    const x = (str) => String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    const msgElements = messages.map((msg, idx) => {
+      const from = msg.from_address || msg.fromAddress || '';
+      const to = parseJsonField(msg.to_addresses || msg.toAddresses, []);
+      const cc = parseJsonField(msg.cc_addresses || msg.ccAddresses, []);
+      const bcc = parseJsonField(msg.bcc_addresses || msg.bccAddresses, []);
+      const body = msg.body_text || msg.bodyText || '';
+
+      return `  <message seq="${idx + 1}" id="${x(msg.id)}">
+    <subject>${x(msg.subject || '')}</subject>
+    <from>${x(from)}</from>
+    <to>${to.map(a => `<address>${x(a)}</address>`).join('')}</to>
+    <cc>${cc.map(a => `<address>${x(a)}</address>`).join('')}</cc>
+    <bcc>${bcc.map(a => `<address>${x(a)}</address>`).join('')}</bcc>
+    <date>${x(msg.date || '')}</date>
+    <folder>${x(msg.folder || '')}</folder>
+    <size>${msg.size || 0}</size>
+    <messageId>${x(msg.message_id || msg.messageId || '')}</messageId>
+    <inReplyTo>${x(msg.in_reply_to || msg.inReplyTo || '')}</inReplyTo>
+    <contentType>${x(msg.content_type || msg.contentType || 'text/plain')}</contentType>
+    <hashes>
+      <md5>${x(msg.hash_md5 || msg.hashMd5 || '')}</md5>
+      <sha256>${x(msg.hash_sha256 || msg.hashSha256 || '')}</sha256>
+      <sha512>${x(msg.hash_sha512 || msg.hashSha512 || '')}</sha512>
+    </hashes>
+    <flags>${x(msg.flags || '[]')}</flags>
+    <hasAttachments>${msg.has_attachments || msg.hasAttachments ? 'true' : 'false'}</hasAttachments>
+    <attachmentCount>${msg.attachment_count || msg.attachmentCount || 0}</attachmentCount>
+    <acquiredAt>${x(msg.acquired_at || '')}</acquiredAt>
+    <body encoding="plain"><![CDATA[${body}]]></body>
+  </message>`;
+    }).join('\n');
+
+    const content = `<?xml version="1.0" encoding="UTF-8"?>
+<sherlockMailExport version="1.0" generated="${x(now)}" tool="SherlockMail v0.9.0">
+  <project id="${x(projectId)}"/>
+  <summary>
+    <totalMessages>${messages.length}</totalMessages>
+    <hashAlgorithm>SHA-256</hashAlgorithm>
+    <exportDate>${x(now)}</exportDate>
+  </summary>
+  <messages count="${messages.length}">
+${msgElements}
+  </messages>
+</sherlockMailExport>
+`;
+
+    return {
+      content,
+      filename: `export_${new Date().toISOString().replace(/[:.]/g, '-')}.xml`,
+      hash: crypto.createHash('sha256').update(content).digest('hex'),
+      size: Buffer.byteLength(content),
+      messageCount: messages.length,
     };
   }
 

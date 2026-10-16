@@ -1481,6 +1481,19 @@ const PROVIDER_NOTES = {
   other: 'Enter server details manually. IMAP is the most widely supported protocol for forensic collection.',
 };
 
+let cachedProfiles = {};
+
+async function loadCollectionProfiles(providerId) {
+  if (cachedProfiles[providerId]) return cachedProfiles[providerId];
+  try {
+    const profiles = await api(`/collection-profiles/${providerId}`);
+    cachedProfiles[providerId] = profiles;
+    return profiles;
+  } catch {
+    return [];
+  }
+}
+
 function wizAutoDetectProvider() {
   const email = document.getElementById('wiz-email').value.trim();
   const providerSelect = document.getElementById('wiz-provider');
@@ -1492,19 +1505,10 @@ function wizAutoDetectProvider() {
   wizProviderChanged();
 }
 
-function wizProviderChanged() {
+async function wizProviderChanged() {
   const providerId = document.getElementById('wiz-provider').value || 'other';
-  const protocolSelect = document.getElementById('wiz-protocol');
   const noteEl = document.getElementById('wiz-provider-note');
-
-  const config = PROVIDER_PROTOCOLS[providerId] || PROVIDER_PROTOCOLS.other;
-
-  const allOptions = protocolSelect.querySelectorAll('option');
-  allOptions.forEach(opt => {
-    opt.style.display = config.options.includes(opt.value) ? '' : 'none';
-  });
-
-  protocolSelect.value = config.best;
+  const profileSelect = document.getElementById('wiz-collection-profile');
 
   if (PROVIDER_NOTES[providerId]) {
     noteEl.textContent = PROVIDER_NOTES[providerId];
@@ -1513,10 +1517,73 @@ function wizProviderChanged() {
     noteEl.style.display = 'none';
   }
 
-  const preset = PROVIDER_PRESETS[providerId]?.[config.best];
-  if (preset) {
-    if (preset.host) document.getElementById('wiz-host').value = preset.host;
-    if (preset.port) document.getElementById('wiz-port').value = preset.port;
+  const profiles = await loadCollectionProfiles(providerId);
+
+  profileSelect.innerHTML = '';
+  for (const p of profiles) {
+    const opt = document.createElement('option');
+    opt.value = p.id;
+    const tag = p.priority === 1 ? ' (Primary)' : ` (Fallback ${p.priority - 1})`;
+    const fv = p.forensicValue === 'HIGH' ? '★' : p.forensicValue === 'MEDIUM' ? '○' : '▽';
+    opt.textContent = `${fv} ${p.name}${tag}`;
+    opt.dataset.profileId = p.id;
+    profileSelect.appendChild(opt);
+  }
+
+  if (profiles.length > 0) {
+    profileSelect.value = profiles[0].id;
+    wizProfileChanged();
+  }
+}
+
+function wizProfileChanged() {
+  const providerId = document.getElementById('wiz-provider').value || 'other';
+  const profileSelect = document.getElementById('wiz-collection-profile');
+  const profileId = profileSelect.value;
+  const profiles = cachedProfiles[providerId] || [];
+  const profile = profiles.find(p => p.id === profileId);
+  if (!profile) return;
+
+  document.getElementById('wiz-protocol').value = profile.protocol;
+
+  const infoEl = document.getElementById('wiz-profile-info');
+  const descEl = document.getElementById('wiz-profile-desc');
+  const forensicEl = document.getElementById('wiz-profile-forensic');
+  const authEl = document.getElementById('wiz-profile-auth');
+  const setupEl = document.getElementById('wiz-profile-setup');
+  const limitsEl = document.getElementById('wiz-profile-limits');
+
+  descEl.textContent = profile.description;
+  const fvColors = { HIGH: 'var(--success)', MEDIUM: 'var(--warning)', LOW: 'var(--text-muted)' };
+  forensicEl.textContent = `Forensic Value: ${profile.forensicValue}`;
+  forensicEl.style.color = fvColors[profile.forensicValue] || 'var(--text-muted)';
+  authEl.textContent = `Auth: ${profile.auth}`;
+  setupEl.textContent = profile.setup ? `Setup: ${profile.setup}` : '';
+  if (profile.limitations && profile.limitations.length > 0) {
+    limitsEl.textContent = `Limitations: ${profile.limitations.join('; ')}`;
+    limitsEl.style.display = '';
+  } else {
+    limitsEl.style.display = 'none';
+  }
+  infoEl.style.display = '';
+
+  if (profile.preset) {
+    if (profile.preset.host) document.getElementById('wiz-host').value = profile.preset.host;
+    if (profile.preset.port) document.getElementById('wiz-port').value = profile.preset.port;
+    if (profile.preset.tls === false) {
+      document.getElementById('wiz-tls').checked = false;
+    } else {
+      document.getElementById('wiz-tls').checked = true;
+    }
+  }
+
+  const authMethodSelect = document.getElementById('wiz-auth-method');
+  if (authMethodSelect) {
+    if (profile.auth === 'app-password') authMethodSelect.value = 'app-password';
+    else if (profile.auth === 'oauth2') authMethodSelect.value = 'oauth2';
+    else if (profile.auth === 'api-token') authMethodSelect.value = 'app-password';
+    else authMethodSelect.value = 'password';
+    wizUpdateAuthLabel();
   }
 
   wizUpdateProtocolFields();
@@ -1535,16 +1602,6 @@ function wizUpdateProtocolFields() {
     fields.style.display = 'none';
   } else {
     fields.style.display = '';
-    const providerId = document.getElementById('wiz-provider').value;
-    const preset = PROVIDER_PRESETS[providerId]?.[protocol];
-    if (preset) {
-      if (preset.host) document.getElementById('wiz-host').value = preset.host;
-      if (preset.port) document.getElementById('wiz-port').value = preset.port;
-    } else {
-      const portInput = document.getElementById('wiz-port');
-      if (protocol === 'pop3') portInput.value = 995;
-      else portInput.value = 993;
-    }
   }
 
   gmailOAuth.style.display = protocol === 'gmail_api' ? '' : 'none';
@@ -1562,10 +1619,12 @@ function wizSaveConnection() {
   const protocol = document.getElementById('wiz-protocol').value;
   const authMethod = document.getElementById('wiz-auth-method')?.value || 'password';
   const password = document.getElementById('wiz-password')?.value || '';
+  const profileId = document.getElementById('wiz-collection-profile')?.value || '';
 
   wizConnection = {
     email: document.getElementById('wiz-email').value,
     protocol,
+    profileId,
   };
 
   if (protocol === 'imap' || protocol === 'pop3') {
@@ -1599,11 +1658,24 @@ async function wizTestConnection() {
     if (result.success !== false && !result.error) {
       el.innerHTML = `<span class="verify-pass">Connection successful${result.folders ? ` (${result.folders.length} folders)` : ''}</span>`;
     } else {
-      el.innerHTML = `<span class="verify-fail">Failed: ${esc(result.error || result.message || 'Unknown error')}</span>`;
+      el.innerHTML = `<span class="verify-fail">Failed: ${esc(result.error || result.message || 'Unknown error')}</span>` + buildFallbackHint();
     }
   } catch (err) {
-    el.innerHTML = `<span class="verify-fail">Error: ${esc(err.message)}</span>`;
+    el.innerHTML = `<span class="verify-fail">Error: ${esc(err.message)}</span>` + buildFallbackHint();
   }
+}
+
+function buildFallbackHint() {
+  const providerId = document.getElementById('wiz-provider').value || 'other';
+  const currentProfileId = document.getElementById('wiz-collection-profile').value;
+  const profiles = cachedProfiles[providerId] || [];
+  const currentIdx = profiles.findIndex(p => p.id === currentProfileId);
+  const fallbacks = profiles.filter((p, i) => i > currentIdx);
+  if (fallbacks.length === 0) return '';
+  const links = fallbacks.map(p =>
+    `<a href="#" onclick="event.preventDefault();document.getElementById('wiz-collection-profile').value='${p.id}';wizProfileChanged()" style="color:var(--accent);text-decoration:underline">${esc(p.name)}</a>`
+  ).join(', ');
+  return `<div style="margin-top:8px;font-size:12px;color:var(--text-muted)">Try a fallback profile: ${links}</div>`;
 }
 
 async function wizDetectProvider() {

@@ -48,7 +48,7 @@ import {
   getAuthStatus as fmGetAuthStatus, saveCredentials as fmSaveCredentials,
   revokeTokens as fmRevokeTokens,
 } from '../services/fastmail-auth.js';
-import { getProviders, detectProvider, getProvider, getRecommendedProtocol, getPreset } from '../services/provider-profiles.js';
+import { getProviders, detectProvider, getProvider, getRecommendedProtocol, getPreset, getCollectionProfiles, getCollectionProfile, getAllCollectionProfiles } from '../services/provider-profiles.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', '..', 'data');
@@ -216,6 +216,16 @@ router.get('/providers/detect', (req, res) => {
   const provider = getProvider(providerId);
   const recommended = getRecommendedProtocol(providerId);
   res.json({ providerId, provider, recommended });
+});
+
+// ── Collection Profiles ──
+router.get('/collection-profiles', (req, res) => {
+  res.json(getAllCollectionProfiles());
+});
+
+router.get('/collection-profiles/:providerId', (req, res) => {
+  const profiles = getCollectionProfiles(req.params.providerId);
+  res.json(profiles);
 });
 
 // ── Projects ──
@@ -1381,11 +1391,15 @@ router.get('/projects/:id/chain-of-custody', (req, res) => {
     timestampRecords: timestamps.length,
     standards: {
       collection: 'ISO/IEC 27037:2012 — Identification, collection, acquisition, preservation',
-      hashing: 'NIST FIPS 180-4 (SHA-256)',
+      hashing: 'NIST FIPS 180-4 (SHA-256/SHA-512)',
       auditTrail: 'NIST SP 800-86 — Guide to Integrating Forensic Techniques',
-      timestamping: 'RFC 3161 Trusted Timestamping',
+      bestPractices: 'SWGDE 18-F-002-2.0 (2025) — Best Practices for Digital Evidence Collection',
+      cloudEvidence: 'SWGDE 23-F-004-1.1 — Digital Evidence from Cloud Service Providers',
+      principles: 'ACPO Good Practice Guide v5 (2012) — Four Principles for Digital Evidence',
+      timestamping: 'RFC 3161 Trusted Timestamping (structure; use production TSA for legal binding)',
       admissibility: 'FRE 901(b)(9) — Process or System Producing Accurate Result',
       authentication: 'FRE 902(14) — Certified Data from Electronic Process',
+      eDiscovery: 'EDRM Collection Standards — Repeatable processes with documented risks',
     },
     certification: {
       statement: `I certify that the evidence described in this report was collected, preserved, and maintained in accordance with forensic best practices. The chain of custody was maintained throughout the process, and the integrity of the evidence can be verified using the hash values and audit trail documented herein.`,
@@ -1550,8 +1564,11 @@ router.get('/projects/:id/verify', (req, res) => {
     standards: {
       hashAlgorithm: 'SHA-256 (NIST FIPS 180-4)',
       auditStandard: 'NIST SP 800-86',
+      evidenceHandling: 'ISO/IEC 27037:2012',
+      bestPractices: 'SWGDE 18-F-002-2.0 (2025)',
+      principles: 'ACPO Good Practice Guide v5 (2012)',
       legalStandard: 'FRE 901(b)(9) / FRE 902(14)',
-      timestampStandard: 'RFC 3161 (structure)',
+      timestampStandard: 'RFC 3161 (structure; use production TSA for legal binding)',
     },
   };
 

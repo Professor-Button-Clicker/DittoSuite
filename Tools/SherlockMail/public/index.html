@@ -280,16 +280,20 @@
                 <div id="wiz-provider-note" style="display:none;margin-bottom:12px;padding:10px 14px;border-radius:8px;background:var(--bg-surface);border:1px solid var(--border);font-size:13px;color:var(--text-muted)"></div>
                 <div class="form-group">
                   <label>Collection Profile</label>
-                  <select id="wiz-protocol" onchange="wizUpdateProtocolFields()">
-                    <option value="imap">IMAP</option>
-                    <option value="pop3">POP3</option>
-                    <option value="ews">Exchange Web Services (EWS)</option>
-                    <option value="graph">Microsoft Graph API</option>
-                    <option value="gmail_api">Gmail API</option>
-                    <option value="zoho_api">Zoho Mail API</option>
-                    <option value="jmap">JMAP (Fastmail)</option>
+                  <select id="wiz-collection-profile" onchange="wizProfileChanged()">
+                    <option value="">-- Select a profile --</option>
                   </select>
                 </div>
+                <div id="wiz-profile-info" style="display:none;margin-bottom:12px;padding:12px 14px;border-radius:8px;background:var(--bg-surface);border:1px solid var(--border);font-size:13px">
+                  <div id="wiz-profile-desc" style="color:var(--text-muted);margin-bottom:8px"></div>
+                  <div style="display:flex;gap:16px;flex-wrap:wrap">
+                    <span id="wiz-profile-forensic" style="font-size:12px;font-weight:600"></span>
+                    <span id="wiz-profile-auth" style="font-size:12px;color:var(--text-muted)"></span>
+                  </div>
+                  <div id="wiz-profile-setup" style="margin-top:8px;font-size:12px;color:var(--text-muted)"></div>
+                  <div id="wiz-profile-limits" style="margin-top:6px;font-size:12px;color:var(--warning)"></div>
+                </div>
+                <input type="hidden" id="wiz-protocol" value="imap">
                 <div id="wiz-protocol-fields">
                   <div class="form-row">
                     <div class="form-group">
@@ -714,6 +718,7 @@
                 <option value="mime">MIME — Raw source</option>
                 <option value="pdf">PDF Report — Printable HTML</option>
                 <option value="concordance">Concordance DAT — eDiscovery load file</option>
+                <option value="xml">XML — Structured data export</option>
               </select>
             </div>
             <div style="display:flex;gap:12px;align-items:center;margin-bottom:24px">
@@ -872,20 +877,21 @@
                 <li><a href="#" onclick="guideScroll('guide-custody')">Chain of Custody</a></li>
                 <li><a href="#" onclick="guideScroll('guide-integrity')">Evidence Integrity</a></li>
                 <li><a href="#" onclick="guideScroll('guide-security')">Security &amp; Forensic Integrity</a></li>
+                <li><a href="#" onclick="guideScroll('guide-standards')">DFIR Standards Compliance</a></li>
               </ol>
             </div>
 
             <section id="guide-overview" class="guide-section">
               <h3>Overview</h3>
-              <p>SherlockMail v0.9.0 is a FEC-grade forensic email collection tool designed for legal, compliance, and investigative professionals. It supports 5 email protocols, provides comprehensive quality control, cloud attachment detection, RFC 3161 timestamping, and maintains a tamper-evident chain of custody.</p>
+              <p>SherlockMail v0.9.0 is a FEC-grade forensic email collection tool designed for legal, compliance, and investigative professionals. It supports 7 email protocols, provides comprehensive quality control, cloud attachment detection, RFC 3161 timestamping, and maintains a tamper-evident chain of custody.</p>
               <div class="guide-features">
                 <div class="guide-feature">
-                  <strong>5 Email Protocols</strong>
-                  <span>IMAP, POP3, EWS, Microsoft Graph API, Gmail API with protocol-level logging</span>
+                  <strong>7 Email Protocols</strong>
+                  <span>IMAP, POP3, EWS, Graph API, Gmail API, Zoho API, JMAP with protocol-level logging</span>
                 </div>
                 <div class="guide-feature">
-                  <strong>9-Point QC Verification</strong>
-                  <span>Collection completeness, hash integrity, duplicates, date consistency, folder coverage, and more</span>
+                  <strong>11-Point QC Verification</strong>
+                  <span>Collection completeness, hash integrity, duplicates, date consistency, DFIR compliance, and more</span>
                 </div>
                 <div class="guide-feature">
                   <strong>RFC 3161 Timestamps</strong>
@@ -930,6 +936,8 @@
                   <tr><td>EWS</td><td>443</td><td>Exchange SOAP API with eDiscovery, autodiscover, recoverable items</td></tr>
                   <tr><td>Graph API</td><td>443</td><td>Microsoft 365 REST API with OAuth 2.0, delta queries, modern attachments</td></tr>
                   <tr><td>Gmail API</td><td>443</td><td>Google REST API with labels, history API, format=raw MIME content</td></tr>
+                  <tr><td>Zoho API</td><td>443</td><td>Zoho REST API with regional endpoints (US/EU/IN/AU/JP), OAuth 2.0</td></tr>
+                  <tr><td>JMAP</td><td>443</td><td>RFC 8621 open standard (Fastmail), batch method calls, state-based sync</td></tr>
                 </tbody>
               </table>
             </section>
@@ -944,7 +952,7 @@
                 <li><strong>Preview</strong> &mdash; Review settings and estimated item count</li>
                 <li><strong>Collecting</strong> &mdash; Live progress with per-message hashing</li>
                 <li><strong>Results</strong> &mdash; View stats, errors, and collection log</li>
-                <li><strong>QC Verify</strong> &mdash; Run 9-point quality control checks</li>
+                <li><strong>QC Verify</strong> &mdash; Run 11-point quality control checks</li>
                 <li><strong>Export &amp; Transfer</strong> &mdash; Export and copy to external storage</li>
               </ol>
             </section>
@@ -959,12 +967,15 @@
                   <tr><td>MSG</td><td>Containerized message wrapping MIME source</td><td>Microsoft Outlook compatibility</td></tr>
                   <tr><td>PST</td><td>Split output with configurable size limit</td><td>Legacy review platforms</td></tr>
                   <tr><td>MIME</td><td>Raw MIME source preservation</td><td>Maximum forensic integrity</td></tr>
+                  <tr><td>PDF Report</td><td>Printable HTML report with metadata and hashes</td><td>Court submissions, case documentation</td></tr>
+                  <tr><td>Concordance DAT</td><td>Load file with Bates numbering (SM-0000001)</td><td>eDiscovery platforms (Relativity, Concordance)</td></tr>
+                  <tr><td>XML</td><td>Structured XML with full metadata and CDATA body</td><td>Case management, XSLT, database imports</td></tr>
                 </tbody>
               </table>
             </section>
 
             <section id="guide-qc" class="guide-section">
-              <h3>Quality Control (9 Checks)</h3>
+              <h3>Quality Control (11 Checks)</h3>
               <ol class="guide-steps">
                 <li><strong>Collection Completeness</strong> &mdash; Verifies all acquisitions completed successfully</li>
                 <li><strong>Hash Integrity</strong> &mdash; Confirms SHA-256 hashes on all messages</li>
@@ -975,6 +986,8 @@
                 <li><strong>Export Completeness</strong> &mdash; Verifies export record counts match</li>
                 <li><strong>Audit Trail</strong> &mdash; Validates hash-chained audit log integrity</li>
                 <li><strong>Encryption Detection</strong> &mdash; Flags encrypted/signed messages</li>
+                <li><strong>Write Protection (ISO 27037)</strong> &mdash; Verifies collection used read-only access (EXAMINE mode)</li>
+                <li><strong>DFIR Standards Compliance</strong> &mdash; Checks examiner, legal authority, case ID, hashing, acquisitions</li>
               </ol>
               <div class="guide-callout guide-callout-warn">
                 <strong>Forensic Integrity Notice</strong>
@@ -1001,8 +1014,12 @@
                 <li><strong>Collection timestamps</strong> &mdash; Generated after each acquisition</li>
                 <li><strong>Export timestamps</strong> &mdash; Generated after each export</li>
                 <li>Includes serial number, generation time, hash algorithm, and message digest</li>
-                <li>Conforms to RFC 3161 structure for court admissibility</li>
+                <li>Conforms to RFC 3161 structure (Internet X.509 PKI Time-Stamp Protocol)</li>
               </ul>
+              <div class="guide-callout guide-callout-warn">
+                <strong>Internal TSA Limitation</strong>
+                <p>SherlockMail uses an internal Timestamp Authority. These timestamps prove internal consistency but are not issued by an accredited QTSP (Qualified Trust Service Provider) per ETSI EN 319 421/422. For legally binding timestamps admissible in court, submit hash digests to a production TSA such as DigiCert, Sectigo, or GlobalSign.</p>
+              </div>
             </section>
 
             <section id="guide-search" class="guide-section">
@@ -1056,6 +1073,82 @@
                 <li>QC verification provides honest, verifiable results</li>
                 <li>RFC 3161 timestamps for collection and export events</li>
               </ul>
+            </section>
+
+            <section id="guide-standards" class="guide-section">
+              <h3>DFIR Standards Compliance</h3>
+              <p>SherlockMail is designed to align with established digital forensic and incident response (DFIR) standards and guidelines:</p>
+
+              <h4>ISO/IEC 27037:2012</h4>
+              <p><em>Guidelines for identification, collection, acquisition, and preservation of digital evidence.</em></p>
+              <ul>
+                <li><strong>Identification</strong> &mdash; Provider auto-detection and protocol enumeration identify available evidence sources</li>
+                <li><strong>Collection</strong> &mdash; IMAP EXAMINE mode ensures read-only access; all protocol interactions are logged</li>
+                <li><strong>Acquisition</strong> &mdash; SHA-256/SHA-512/MD5 triple hashing at acquisition time; per-message integrity verification</li>
+                <li><strong>Preservation</strong> &mdash; Hash-chained audit log, RFC 3161 timestamps, and tamper-evident chain of custody</li>
+                <li><strong>Four principles</strong> &mdash; Auditability (full audit trail), Repeatability (documented procedures), Reproducibility (hash verification), Justifiability (legal authority fields)</li>
+              </ul>
+
+              <h4>NIST SP 800-86</h4>
+              <p><em>Guide to Integrating Forensic Techniques into Incident Response.</em></p>
+              <ul>
+                <li><strong>Collection</strong> &mdash; 9-step wizard ensures systematic collection with documented parameters</li>
+                <li><strong>Examination</strong> &mdash; Inline search, header analysis, threading, and deduplication tools</li>
+                <li><strong>Analysis</strong> &mdash; Timeline visualization, relationship mapping, SPF/DKIM/DMARC authentication analysis</li>
+                <li><strong>Reporting</strong> &mdash; Chain of custody reports, PDF forensic reports, hash manifests</li>
+              </ul>
+
+              <h4>SWGDE Best Practices (2025)</h4>
+              <p><em>Scientific Working Group on Digital Evidence &mdash; Best Practices for Digital Evidence Collection (18-F-002-2.0).</em></p>
+              <ul>
+                <li><strong>Legal authority</strong> &mdash; Projects require legal authority and scope documentation before collection</li>
+                <li><strong>Documentation of changes</strong> &mdash; Any live collection that alters data is documented in the audit trail</li>
+                <li><strong>Ancillary data</strong> &mdash; Full email headers, metadata, cloud attachment links, and encryption status are preserved</li>
+                <li><strong>Targeted collection</strong> &mdash; Query filters, date ranges, and folder selection support defensible scope</li>
+                <li><strong>Cloud evidence</strong> &mdash; Per SWGDE 23-F-004-1.1, IMAP/API collection from cloud providers is documented as a viable option</li>
+              </ul>
+
+              <h4>ACPO Good Practice Guide (v5, 2012)</h4>
+              <p><em>Association of Chief Police Officers &mdash; Good Practice Guide for Digital Evidence.</em></p>
+              <ul>
+                <li><strong>Principle 1</strong> (No alteration) &mdash; IMAP EXAMINE mode prevents flag changes; BODY.PEEK[] avoids setting \Seen</li>
+                <li><strong>Principle 2</strong> (Competent access) &mdash; Examiner name recorded on all operations; justification fields available</li>
+                <li><strong>Principle 3</strong> (Audit trail) &mdash; SHA-256 hash-chained audit log records every action with timestamps</li>
+                <li><strong>Principle 4</strong> (Overall responsibility) &mdash; Examiner certification in chain of custody reports</li>
+              </ul>
+
+              <h4>EDRM (Electronic Discovery Reference Model)</h4>
+              <ul>
+                <li><strong>Collection Standards</strong> &mdash; Documented, repeatable collection processes with protocol logging</li>
+                <li><strong>Processing</strong> &mdash; Deduplication by SHA-256 hash and Message-ID, near-duplicate detection</li>
+                <li><strong>Production</strong> &mdash; Concordance DAT with Bates numbering (SM-0000001), OPT cross-reference files</li>
+              </ul>
+
+              <h4>Federal Rules of Evidence (FRE)</h4>
+              <ul>
+                <li><strong>FRE 901(b)(9)</strong> &mdash; Process producing accurate result: documented collection, hash verification, QC checks</li>
+                <li><strong>FRE 902(14)</strong> &mdash; Certified data from electronic process: hash manifests and chain of custody reports</li>
+              </ul>
+
+              <h4>Additional Standards</h4>
+              <table class="guide-table">
+                <thead><tr><th>Standard</th><th>Application</th></tr></thead>
+                <tbody>
+                  <tr><td>NIST FIPS 180-4</td><td>SHA-256/SHA-512 hash algorithms for evidence integrity</td></tr>
+                  <tr><td>RFC 3161</td><td>Trusted timestamping structure (use production TSA for legal binding)</td></tr>
+                  <tr><td>RFC 5322 / RFC 9051</td><td>Email message format / IMAP4rev2 protocol compliance</td></tr>
+                  <tr><td>RFC 8621</td><td>JMAP protocol for modern email access (Fastmail)</td></tr>
+                </tbody>
+              </table>
+
+              <div class="guide-callout guide-callout-warn">
+                <strong>Important Disclaimer</strong>
+                <p>SherlockMail generates RFC 3161-<em>structured</em> timestamps internally. For legally binding timestamps with evidentiary weight, connect to a qualified Timestamp Authority (TSA) such as DigiCert, Sectigo, or FreeTSA. Internal timestamps prove internal consistency but lack independent third-party attestation required by some jurisdictions and by ETSI EN 319 421/422.</p>
+              </div>
+              <div class="guide-callout">
+                <strong>Deviation Documentation</strong>
+                <p>Per SWGDE guidelines, if you encounter situations warranting deviation from standard collection practices, thoroughly document the specifics in the project notes and audit log. SherlockMail logs all protocol interactions and collection parameters automatically, but examiner notes on deviations should be added manually to the chain of custody.</p>
+              </div>
             </section>
           </div>
         </div>

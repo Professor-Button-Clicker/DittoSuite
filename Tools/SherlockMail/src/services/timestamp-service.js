@@ -90,14 +90,16 @@ export class TimestampService {
   static getInfo() {
     return {
       standard: 'RFC 3161 — Internet X.509 PKI Time-Stamp Protocol (TSP)',
-      description: 'Trusted timestamps prove that data existed at a specific point in time. SherlockMail generates RFC 3161-structured timestamps internally. For legally binding timestamps, connect to a production TSA (e.g., DigiCert, Sectigo, FreeTSA).',
+      description: 'Trusted timestamps prove that data existed at a specific point in time. SherlockMail generates RFC 3161-structured timestamps using an internal TSA. These timestamps prove internal consistency but DO NOT carry independent third-party attestation. For legally binding timestamps with evidentiary weight, connect to a qualified Timestamp Authority (TSA) listed below.',
+      disclaimer: 'IMPORTANT: Internal timestamps are NOT issued by an accredited Qualified Trust Service Provider (QTSP) and do not comply with ETSI EN 319 421/422 standards. The opposing party may challenge both the accuracy of the time source and the integrity of the process. For court-admissible timestamps, use a production TSA.',
       productionTSAs: [
-        { name: 'DigiCert', url: 'http://timestamp.digicert.com', protocol: 'RFC 3161' },
-        { name: 'Sectigo', url: 'http://timestamp.sectigo.com', protocol: 'RFC 3161' },
-        { name: 'FreeTSA', url: 'https://freetsa.org/tsr', protocol: 'RFC 3161' },
-        { name: 'GlobalSign', url: 'http://timestamp.globalsign.com', protocol: 'RFC 3161' },
+        { name: 'DigiCert', url: 'http://timestamp.digicert.com', protocol: 'RFC 3161', qualified: true },
+        { name: 'Sectigo', url: 'http://timestamp.sectigo.com', protocol: 'RFC 3161', qualified: true },
+        { name: 'FreeTSA', url: 'https://freetsa.org/tsr', protocol: 'RFC 3161', qualified: false },
+        { name: 'GlobalSign', url: 'http://timestamp.globalsign.com', protocol: 'RFC 3161', qualified: true },
       ],
-      forensicValue: 'Timestamps prove when evidence was collected and exported. Combined with hash verification, they establish that evidence has not been altered since the recorded time.',
+      forensicValue: 'Timestamps prove when evidence was collected and exported. Combined with hash verification, they establish that evidence has not been altered since the recorded time. Per ISO/IEC 27037, every piece of evidence should be accompanied by a verifiable time reference.',
+      relatedStandards: ['ISO/IEC 27037:2012', 'NIST SP 800-86', 'ETSI EN 319 421', 'ETSI EN 319 422'],
     };
   }
 }
