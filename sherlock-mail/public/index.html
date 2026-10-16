@@ -22,14 +22,12 @@
 
       <div class="nav-tabs">
         <div class="nav-tab active" data-tab="projects" onclick="switchTab('projects')">Projects</div>
-        <div class="nav-tab" data-tab="messages" onclick="switchTab('messages')">Messages</div>
-        <div class="nav-tab" data-tab="search" onclick="switchTab('search')">Search</div>
-        <div class="nav-tab" data-tab="audit" onclick="switchTab('audit')">Chain of Custody</div>
+        <div class="nav-tab" data-tab="audit" onclick="switchTab('audit')">Tracker</div>
         <div class="nav-tab" data-tab="collect" onclick="switchTab('collect')">Collect</div>
+        <div class="nav-tab" data-tab="forensics" onclick="switchTab('forensics')">QC</div>
         <div class="nav-tab" data-tab="export" onclick="switchTab('export')">Export</div>
-        <div class="nav-tab" data-tab="forensics" onclick="switchTab('forensics')">Forensics</div>
+        <div class="nav-tab" data-tab="messages" onclick="switchTab('messages')">Review</div>
         <div class="nav-tab" data-tab="guide" onclick="switchTab('guide')">Guide</div>
-        <div class="nav-tab" data-tab="new-project" onclick="switchTab('new-project')">+ New</div>
       </div>
 
       <div class="top-bar-right">
@@ -130,22 +128,22 @@
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:500px">
               <div class="form-group">
-                <label>Case Name</label>
-                <input type="text" id="proj-case-name" placeholder="Smith v. Jones">
+                <label>Case / Matter ID</label>
+                <input type="text" id="proj-case-id" placeholder="C1231234">
               </div>
               <div class="form-group">
-                <label>Case / Matter ID</label>
-                <input type="text" id="proj-case-id" placeholder="2024-CV-001">
+                <label>Evidence ID</label>
+                <input type="text" id="proj-evidence-id" placeholder="999-0001">
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:500px">
               <div class="form-group">
-                <label>Examiner Name</label>
-                <input type="text" id="proj-examiner" placeholder="Examiner name">
+                <label>Custodian Name</label>
+                <input type="text" id="proj-custodian" placeholder="Custodian name">
               </div>
               <div class="form-group">
-                <label>Agency / Firm</label>
-                <input type="text" id="proj-agency" placeholder="Agency or firm name">
+                <label>Examiner Name</label>
+                <input type="text" id="proj-examiner" placeholder="Examiner name">
               </div>
             </div>
             <div style="margin-top:24px;display:flex;gap:12px">
@@ -722,7 +720,15 @@
         <div id="view-guide" class="panel-view">
           <div class="guide-container">
             <h2>SherlockMail v2.0 User Guide</h2>
-            <p class="wizard-desc" style="margin-bottom:28px">FEC-grade forensic email collection, verification, and export documentation.</p>
+            <p class="wizard-desc" style="margin-bottom:16px">FEC-grade forensic email collection, verification, and export documentation.</p>
+
+            <div style="margin-bottom:24px;max-width:500px">
+              <div style="position:relative">
+                <input type="text" id="guide-search-input" placeholder="Search the guide..." oninput="guideSearch(this.value)" style="width:100%;padding-right:36px">
+                <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:var(--text-muted);pointer-events:none;font-size:14px">&#x1F50D;</span>
+              </div>
+              <div id="guide-search-results" style="margin-top:8px;font-size:13px;color:var(--text-secondary);display:none"></div>
+            </div>
 
             <div class="guide-toc">
               <h3>Contents</h3>

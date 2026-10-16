@@ -65,17 +65,18 @@ export function addAuditEntry(projectId, eventType, description, details, examin
   return hash;
 }
 
-export function createProject({ name, targetEmail, providerType, caseName, caseId, examinerName, agency, legalAuthority, legalScope, config }) {
+export function createProject({ name, targetEmail, providerType, caseName, caseId, examinerName, agency, evidenceId, custodianName, legalAuthority, legalScope, config }) {
   const d = getDb();
   const id = uuidv4();
   const now = new Date().toISOString();
+  const projectConfig = { ...(config || {}), custodianName: custodianName || null, evidenceId: evidenceId || null };
   d.prepare(`INSERT INTO projects (id, name, target_email, provider_type, case_name, case_id, examiner_name, agency, legal_authority, legal_scope, status, created_at, updated_at, config)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?, ?)`).run(
     id, name, targetEmail, providerType, caseName || null, caseId || null,
-    examinerName || null, agency || null, legalAuthority || null, legalScope || null, now, now, JSON.stringify(config || {})
+    examinerName || null, evidenceId || agency || null, legalAuthority || null, legalScope || null, now, now, JSON.stringify(projectConfig)
   );
   addAuditEntry(id, 'PROJECT_CREATED', `Project created for ${targetEmail}`, {
-    targetEmail, providerType, caseName, caseId
+    targetEmail, providerType, caseId, evidenceId, custodianName
   }, examinerName);
   return { id, name, targetEmail, providerType, status: 'created', createdAt: now };
 }

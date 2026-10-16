@@ -325,10 +325,10 @@ async function createProject(e) {
     name: document.getElementById('proj-name').value,
     targetEmail: document.getElementById('proj-email').value,
     providerType: document.getElementById('proj-provider').value,
-    caseName: document.getElementById('proj-case-name').value,
     caseId: document.getElementById('proj-case-id').value,
-    examinerName: document.getElementById('proj-examiner').value,
-    agency: document.getElementById('proj-agency').value
+    evidenceId: document.getElementById('proj-evidence-id').value,
+    custodianName: document.getElementById('proj-custodian').value,
+    examinerName: document.getElementById('proj-examiner').value
   };
 
   try {
@@ -1308,6 +1308,69 @@ function wizResetState() {
 function guideScroll(id) {
   const el = document.getElementById(id);
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function guideSearch(query) {
+  const resultsDiv = document.getElementById('guide-search-results');
+  const container = document.querySelector('.guide-container');
+  const sections = container.querySelectorAll('.guide-section');
+  const toc = container.querySelector('.guide-toc');
+
+  container.querySelectorAll('.guide-search-highlight').forEach(el => {
+    el.replaceWith(el.textContent);
+  });
+  sections.forEach(s => s.style.display = '');
+
+  if (!query || query.trim().length < 2) {
+    resultsDiv.style.display = 'none';
+    if (toc) toc.style.display = '';
+    return;
+  }
+
+  const term = query.trim().toLowerCase();
+  const matches = [];
+
+  sections.forEach(sec => {
+    const text = sec.textContent.toLowerCase();
+    if (text.includes(term)) {
+      matches.push(sec);
+      sec.style.display = '';
+      highlightText(sec, query.trim());
+    } else {
+      sec.style.display = 'none';
+    }
+  });
+
+  if (toc) toc.style.display = matches.length < sections.length ? 'none' : '';
+
+  if (matches.length === 0) {
+    resultsDiv.innerHTML = `No results for "<strong>${escapeHtml(query)}</strong>"`;
+    resultsDiv.style.display = 'block';
+  } else {
+    resultsDiv.innerHTML = `${matches.length} section${matches.length !== 1 ? 's' : ''} matching "<strong>${escapeHtml(query)}</strong>"`;
+    resultsDiv.style.display = 'block';
+  }
+}
+
+function highlightText(node, term) {
+  const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+  const regex = new RegExp(`(${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  textNodes.forEach(tn => {
+    if (regex.test(tn.textContent)) {
+      const span = document.createElement('span');
+      span.innerHTML = tn.textContent.replace(regex, '<mark class="guide-search-highlight" style="background:#fbbf24;color:#000;padding:0 2px;border-radius:2px">$1</mark>');
+      tn.replaceWith(span);
+    }
+  });
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
 }
 
 // --- Utilities ---
