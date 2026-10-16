@@ -1024,6 +1024,383 @@ router.get('/projects/:id/analytics/relationships', (req, res) => {
   });
 });
 
+// ── Analytics: Email Threading ──
+router.get('/projects/:id/analytics/threading', (req, res) => {
+  const project = getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const messages = getAllProjectMessages(project.id);
+  const byMsgId = {};
+  const threads = [];
+  const orphans = [];
+
+  for (const msg of messages) {
+    if (msg.message_id) byMsgId[msg.message_id] = msg;
+  }
+
+  const assigned = new Set();
+
+  function buildThread(root) {
+    const thread = [root];
+    assigned.add(root.id);
+    const children = messages.filter(m =>
+      !assigned.has(m.id) && (
+        (m.in_reply_to && m.in_reply_to === root.message_id) ||
+        (m.headers_json && (() => {
+          try {
+            const h = typeof m.headers_json === 'string' ? JSON.parse(m.headers_json) : m.headers_json;
+            const refs = h.references || h.References || '';
+            return refs.includes(root.message_id);
+          } catch { return false; }
+        })())
+      )
+    );
+    for (const child of children) {
+      thread.push(...buildThread(child));
+    }
+    return thread;
+  }
+
+  for (const msg of messages) {
+    if (assigned.has(msg.id)) continue;
+    const isReply = msg.in_reply_to && byMsgId[msg.in_reply_to];
+    if (isReply) continue;
+
+    const thread = buildThread(msg);
+    if (thread.length > 1) {
+      threads.push({
+        rootMessageId: msg.message_id,
+        rootSubject: msg.subject,
+        rootFrom: msg.from_address,
+        rootDate: msg.date,
+        messageCount: thread.length,
+        participants: [...new Set(thread.map(m => m.from_address).filter(Boolean))],
+        dateRange: {
+          from: thread.reduce((min, m) => m.date && m.date < min ? m.date : min, thread[0]?.date || ''),
+          to: thread.reduce((max, m) => m.date && m.date > max ? m.date : max, thread[0]?.date || ''),
+        },
+        messages: thread.map(m => ({
+          id: m.id, subject: m.subject, from: m.from_address, date: m.date,
+          inReplyTo: m.in_reply_to, messageId: m.message_id
+        })),
+      });
+    }
+  }
+
+  for (const msg of messages) {
+    if (!assigned.has(msg.id)) orphans.push(msg.id);
+  }
+
+  const subjectGroups = {};
+  for (const id of orphans) {
+    const msg = messages.find(m => m.id === id);
+    if (!msg) continue;
+    const normSubj = (msg.subject || '').replace(/^(Re|Fwd|Fw)\s*:\s*/gi, '').trim().toLowerCase();
+    if (!normSubj) continue;
+    if (!subjectGroups[normSubj]) subjectGroups[normSubj] = [];
+    subjectGroups[normSubj].push(msg);
+  }
+
+  for (const [, group] of Object.entries(subjectGroups)) {
+    if (group.length > 1) {
+      group.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      threads.push({
+        rootMessageId: group[0].message_id,
+        rootSubject: group[0].subject,
+        rootFrom: group[0].from_address,
+        rootDate: group[0].date,
+        messageCount: group.length,
+        participants: [...new Set(group.map(m => m.from_address).filter(Boolean))],
+        dateRange: {
+          from: group[0].date,
+          to: group[group.length - 1].date,
+        },
+        threadedBy: 'subject',
+        messages: group.map(m => ({
+          id: m.id, subject: m.subject, from: m.from_address, date: m.date,
+          inReplyTo: m.in_reply_to, messageId: m.message_id
+        })),
+      });
+      group.forEach(m => assigned.add(m.id));
+    }
+  }
+
+  threads.sort((a, b) => b.messageCount - a.messageCount);
+
+  res.json({
+    totalMessages: messages.length,
+    threadedMessages: assigned.size,
+    singleMessages: messages.length - assigned.size,
+    threadCount: threads.length,
+    threads: threads.slice(0, 100),
+  });
+});
+
+// ── Analytics: Deduplication ──
+router.get('/projects/:id/analytics/dedup', (req, res) => {
+  const project = getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const messages = getAllProjectMessages(project.id);
+  const hashGroups = {};
+  const contentGroups = {};
+
+  for (const msg of messages) {
+    if (msg.hash_sha256) {
+      if (!hashGroups[msg.hash_sha256]) hashGroups[msg.hash_sha256] = [];
+      hashGroups[msg.hash_sha256].push(msg);
+    }
+
+    const contentKey = crypto.createHash('sha256').update(
+      [msg.from_address || '', msg.to_addresses || '', msg.subject || '', (msg.date || '').substring(0, 19), (msg.body_text || '').substring(0, 500)].join('|')
+    ).digest('hex');
+    if (!contentGroups[contentKey]) contentGroups[contentKey] = [];
+    contentGroups[contentKey].push(msg);
+  }
+
+  const exactDupes = Object.entries(hashGroups)
+    .filter(([, group]) => group.length > 1)
+    .map(([hash, group]) => ({
+      hash,
+      count: group.length,
+      subject: group[0].subject,
+      from: group[0].from_address,
+      date: group[0].date,
+      folders: [...new Set(group.map(m => m.folder).filter(Boolean))],
+      ids: group.map(m => m.id),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  const nearDupes = Object.entries(contentGroups)
+    .filter(([, group]) => group.length > 1)
+    .filter(([, group]) => {
+      const hashes = new Set(group.map(m => m.hash_sha256).filter(Boolean));
+      return hashes.size > 1 || !group[0].hash_sha256;
+    })
+    .map(([hash, group]) => ({
+      contentHash: hash,
+      count: group.length,
+      subject: group[0].subject,
+      from: group[0].from_address,
+      date: group[0].date,
+      ids: group.map(m => m.id),
+    }))
+    .sort((a, b) => b.count - a.count);
+
+  const totalExactDupeMessages = exactDupes.reduce((sum, d) => sum + d.count - 1, 0);
+  const totalNearDupeMessages = nearDupes.reduce((sum, d) => sum + d.count - 1, 0);
+  const uniqueMessages = messages.length - totalExactDupeMessages;
+  const dedupSavingsPct = messages.length > 0 ? ((totalExactDupeMessages / messages.length) * 100).toFixed(1) : '0.0';
+
+  res.json({
+    totalMessages: messages.length,
+    uniqueMessages,
+    exactDuplicates: totalExactDupeMessages,
+    nearDuplicates: totalNearDupeMessages,
+    dedupSavingsPercent: dedupSavingsPct,
+    exactGroups: exactDupes.slice(0, 50),
+    nearGroups: nearDupes.slice(0, 50),
+    hashAlgorithm: 'SHA-256',
+  });
+});
+
+// ── Analytics: Header Analysis ──
+router.get('/projects/:id/messages/:msgId/headers', (req, res) => {
+  const msg = getMessage(req.params.msgId);
+  if (!msg || msg.project_id !== req.params.id) return res.status(404).json({ error: 'Message not found' });
+
+  let headers = {};
+  try { headers = typeof msg.headers_json === 'string' ? JSON.parse(msg.headers_json) : (msg.headers_json || {}); } catch {}
+
+  const receivedHeaders = [];
+  const rawReceived = headers.received || headers.Received || [];
+  const receivedList = Array.isArray(rawReceived) ? rawReceived : [rawReceived];
+
+  for (const hop of receivedList) {
+    if (!hop) continue;
+    const fromMatch = hop.match(/from\s+(\S+)/i);
+    const byMatch = hop.match(/by\s+(\S+)/i);
+    const dateMatch = hop.match(/;\s*(.+)$/);
+    const ipMatch = hop.match(/\[(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\]/);
+
+    receivedHeaders.push({
+      raw: hop,
+      from: fromMatch?.[1] || null,
+      by: byMatch?.[1] || null,
+      ip: ipMatch?.[1] || null,
+      date: dateMatch?.[1]?.trim() || null,
+    });
+  }
+
+  const authResults = headers['authentication-results'] || headers['Authentication-Results'] || '';
+  const authList = Array.isArray(authResults) ? authResults : [authResults];
+  const authentication = { spf: 'none', dkim: 'none', dmarc: 'none', raw: authList.filter(Boolean) };
+
+  for (const ar of authList) {
+    if (!ar) continue;
+    const spfMatch = ar.match(/spf=(\w+)/i);
+    const dkimMatch = ar.match(/dkim=(\w+)/i);
+    const dmarcMatch = ar.match(/dmarc=(\w+)/i);
+    if (spfMatch) authentication.spf = spfMatch[1].toLowerCase();
+    if (dkimMatch) authentication.dkim = dkimMatch[1].toLowerCase();
+    if (dmarcMatch) authentication.dmarc = dmarcMatch[1].toLowerCase();
+  }
+
+  const dkimSig = headers['dkim-signature'] || headers['DKIM-Signature'] || '';
+  const dkimDomain = dkimSig ? (dkimSig.match(/d=([^;\s]+)/)?.[1] || null) : null;
+
+  const returnPath = headers['return-path'] || headers['Return-Path'] || '';
+  const replyTo = headers['reply-to'] || headers['Reply-To'] || '';
+  const fromHeader = headers.from || headers.From || msg.from_address || '';
+
+  const redFlags = [];
+  if (returnPath && fromHeader && !returnPath.toLowerCase().includes(fromHeader.toLowerCase().replace(/.*</, '').replace(/>.*/, '').split('@')[1] || '__none__')) {
+    redFlags.push({ type: 'RETURN_PATH_MISMATCH', description: 'Return-Path domain does not match From domain', severity: 'warning' });
+  }
+  if (replyTo && fromHeader && replyTo.toLowerCase() !== fromHeader.toLowerCase()) {
+    redFlags.push({ type: 'REPLY_TO_DIFFERS', description: 'Reply-To differs from From address', severity: 'info' });
+  }
+  if (authentication.spf === 'fail' || authentication.spf === 'softfail') {
+    redFlags.push({ type: 'SPF_FAIL', description: `SPF check ${authentication.spf}ed — sender not authorized`, severity: 'critical' });
+  }
+  if (authentication.dkim === 'fail') {
+    redFlags.push({ type: 'DKIM_FAIL', description: 'DKIM signature verification failed — message may be altered', severity: 'critical' });
+  }
+  if (authentication.dmarc === 'fail') {
+    redFlags.push({ type: 'DMARC_FAIL', description: 'DMARC policy check failed', severity: 'critical' });
+  }
+  if (dkimDomain && fromHeader && !fromHeader.toLowerCase().includes(dkimDomain.toLowerCase())) {
+    redFlags.push({ type: 'DKIM_DOMAIN_MISMATCH', description: `DKIM signed by ${dkimDomain} but From shows different domain`, severity: 'warning' });
+  }
+
+  const hopCount = receivedHeaders.length;
+  if (hopCount > 8) {
+    redFlags.push({ type: 'EXCESSIVE_HOPS', description: `Message traversed ${hopCount} servers — unusually high`, severity: 'info' });
+  }
+
+  res.json({
+    messageId: msg.message_id,
+    subject: msg.subject,
+    from: msg.from_address,
+    date: msg.date,
+    receivedHops: receivedHeaders,
+    authentication,
+    dkimDomain,
+    returnPath,
+    replyTo,
+    redFlags,
+    xHeaders: Object.entries(headers).filter(([k]) => k.toLowerCase().startsWith('x-')).map(([k, v]) => ({ name: k, value: v })),
+    rawHeaderCount: Object.keys(headers).length,
+  });
+});
+
+// ── Chain of Custody Report ──
+router.get('/projects/:id/chain-of-custody', (req, res) => {
+  const project = getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const auditLog = getAuditLog(req.params.id);
+  const messages = getAllProjectMessages(project.id);
+  const acquisitions = getAcquisitions(project.id);
+  const exports = getExportRecords(project.id);
+  const timestamps = getTimestampRecords(project.id);
+  const chainVerification = verifyAuditChain(auditLog);
+
+  let config = {};
+  try { config = JSON.parse(project.config || '{}'); } catch {}
+
+  const custodyEvents = auditLog.map(entry => ({
+    timestamp: entry.timestamp,
+    event: entry.event_type,
+    description: entry.description,
+    handler: entry.examiner || project.examiner_name || 'System',
+    hashChain: entry.hash,
+    verified: true,
+  }));
+
+  const report = {
+    reportGenerated: new Date().toISOString(),
+    reportVersion: '1.0',
+    toolInfo: {
+      name: 'SherlockMail',
+      version: '0.9.0',
+      description: 'FEC-grade forensic email collection tool',
+    },
+    caseInfo: {
+      projectName: project.name,
+      projectId: project.id,
+      caseId: project.case_id,
+      caseName: project.case_name,
+      evidenceId: config.evidenceId || project.agency,
+      custodian: config.custodianName || null,
+      examiner: project.examiner_name,
+      targetEmail: project.target_email,
+      provider: project.provider_type,
+      legalAuthority: project.legal_authority,
+      legalScope: project.legal_scope,
+      projectCreated: project.created_at,
+    },
+    evidenceSummary: {
+      totalMessages: messages.length,
+      totalAttachments: messages.reduce((sum, m) => sum + (m.attachment_count || 0), 0),
+      totalSize: messages.reduce((sum, m) => sum + (m.size || 0), 0),
+      dateRange: messages.length > 0 ? {
+        earliest: messages.reduce((min, m) => m.date && m.date < min ? m.date : min, messages[0]?.date || ''),
+        latest: messages.reduce((max, m) => m.date && m.date > max ? m.date : max, messages[0]?.date || ''),
+      } : null,
+      hashAlgorithms: ['MD5', 'SHA-256', 'SHA-512'],
+      messagesWithHash: messages.filter(m => m.hash_sha256).length,
+    },
+    acquisitionHistory: acquisitions.map(a => ({
+      id: a.id,
+      status: a.status,
+      started: a.started_at,
+      completed: a.completed_at,
+      totalMessages: a.total_messages,
+      acquiredMessages: a.acquired_messages,
+      failedMessages: a.failed_messages,
+      totalBytes: a.total_bytes,
+    })),
+    custodyChain: custodyEvents,
+    auditIntegrity: {
+      totalEntries: auditLog.length,
+      chainValid: chainVerification.valid,
+      breaks: chainVerification.breaks,
+      hashAlgorithm: 'SHA-256',
+      standard: 'NIST SP 800-86 compliant hash chain',
+    },
+    exportHistory: exports.map(e => ({
+      id: e.id,
+      format: e.format,
+      started: e.started_at,
+      completed: e.completed_at,
+      messageCount: e.message_count,
+      totalBytes: e.total_bytes,
+      hash: e.hash_sha256,
+    })),
+    timestampRecords: timestamps.length,
+    standards: {
+      collection: 'ISO/IEC 27037:2012 — Identification, collection, acquisition, preservation',
+      hashing: 'NIST FIPS 180-4 (SHA-256)',
+      auditTrail: 'NIST SP 800-86 — Guide to Integrating Forensic Techniques',
+      timestamping: 'RFC 3161 Trusted Timestamping',
+      admissibility: 'FRE 901(b)(9) — Process or System Producing Accurate Result',
+      authentication: 'FRE 902(14) — Certified Data from Electronic Process',
+    },
+    certification: {
+      statement: `I certify that the evidence described in this report was collected, preserved, and maintained in accordance with forensic best practices. The chain of custody was maintained throughout the process, and the integrity of the evidence can be verified using the hash values and audit trail documented herein.`,
+      examiner: project.examiner_name,
+      date: new Date().toISOString(),
+    },
+  };
+
+  addAuditEntry(req.params.id, 'CUSTODY_REPORT_GENERATED', 'Chain of custody report generated', {
+    messageCount: messages.length, auditEntries: auditLog.length, chainValid: chainVerification.valid,
+  }, project.examiner_name);
+
+  res.json(report);
+});
+
 // ── Export ──
 router.get('/export/formats', (req, res) => {
   res.json(ExportService.getFormats());

@@ -738,6 +738,9 @@
             <div class="sub-tab" data-subtab="integrity" onclick="switchForensicsTab('integrity')">Evidence Integrity</div>
             <div class="sub-tab" data-subtab="timeline" onclick="switchForensicsTab('timeline')">Timeline</div>
             <div class="sub-tab" data-subtab="relationships" onclick="switchForensicsTab('relationships')">Relationships</div>
+            <div class="sub-tab" data-subtab="threading" onclick="switchForensicsTab('threading')">Threading</div>
+            <div class="sub-tab" data-subtab="dedup" onclick="switchForensicsTab('dedup')">Dedup</div>
+            <div class="sub-tab" data-subtab="custody" onclick="switchForensicsTab('custody')">Custody</div>
           </div>
 
           <!-- QC Sub-panel -->
@@ -804,6 +807,39 @@
               <span id="relationships-status"></span>
             </div>
             <div id="relationships-results"></div>
+          </div>
+
+          <!-- Threading Sub-panel -->
+          <div class="sub-panel" id="forensics-threading">
+            <h3 style="margin-bottom:16px">Email Threading (Conversation Grouping)</h3>
+            <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Groups replies and forwards into conversations using Message-ID, In-Reply-To, and References headers per RFC 5322. Falls back to normalized subject matching (JWZ algorithm).</p>
+            <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px">
+              <button class="btn btn-primary" onclick="loadThreading()">Analyze Threads</button>
+              <span id="threading-status"></span>
+            </div>
+            <div id="threading-results"></div>
+          </div>
+
+          <!-- Dedup Sub-panel -->
+          <div class="sub-panel" id="forensics-dedup">
+            <h3 style="margin-bottom:16px">Deduplication Analysis</h3>
+            <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Identifies exact duplicates (SHA-256 hash match) and near-duplicates (normalized content comparison). Per EDRM Processing Guidelines for defensible deduplication.</p>
+            <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px">
+              <button class="btn btn-primary" onclick="loadDedup()">Scan for Duplicates</button>
+              <span id="dedup-status"></span>
+            </div>
+            <div id="dedup-results"></div>
+          </div>
+
+          <!-- Chain of Custody Sub-panel -->
+          <div class="sub-panel" id="forensics-custody">
+            <h3 style="margin-bottom:16px">Chain of Custody Report</h3>
+            <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Generates a formal chain of custody report aligned with NIST SP 800-86 and ISO/IEC 27037:2012. Documents evidence handling, audit trail integrity, and applicable legal standards.</p>
+            <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px">
+              <button class="btn btn-primary" onclick="loadCustody()">Generate Report</button>
+              <span id="custody-status"></span>
+            </div>
+            <div id="custody-results"></div>
           </div>
         </div>
 

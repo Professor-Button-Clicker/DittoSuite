@@ -447,14 +447,24 @@ ${rows}
     const Q = 'ð'; // ð (eth) — Concordance text qualifier
 
     const fields = [
-      'DOCID', 'FROM', 'TO', 'CC', 'BCC', 'SUBJECT', 'DATESENT', 'TIMESENT',
-      'FOLDER', 'HASATTACHMENTS', 'ATTACHCOUNT', 'MESSAGESIZE', 'MESSAGEID',
+      'DOCID', 'BATES_BEGIN', 'BATES_END', 'BATES_ATTACH_BEGIN', 'BATES_ATTACH_END',
+      'CUSTODIAN', 'FROM', 'TO', 'CC', 'BCC', 'SUBJECT', 'DATESENT', 'TIMESENT',
+      'DATERCVD', 'TIMERCVD', 'FOLDER', 'HASATTACHMENTS', 'ATTACHCOUNT',
+      'MESSAGESIZE', 'MESSAGEID', 'CONVERSATIONINDEX', 'PARENTID',
       'HASHMD5', 'HASHSHA256', 'BODYTEXT',
     ];
 
     const header = fields.map(f => `${Q}${f}${Q}`).join(D);
+    const batesPrefix = 'SM-';
+    const padLen = 7;
 
-    const rows = messages.map(msg => {
+    const rows = messages.map((msg, idx) => {
+      const batesNum = String(idx + 1).padStart(padLen, '0');
+      const batesBegin = `${batesPrefix}${batesNum}`;
+      const batesEnd = batesBegin;
+      const attCount = msg.attachment_count || msg.attachmentCount || 0;
+      const batesAttEnd = attCount > 0 ? `${batesPrefix}${String(idx + 1 + attCount).padStart(padLen, '0')}` : '';
+
       const from = msg.from_address || msg.fromAddress || '';
       const to = parseJsonField(msg.to_addresses || msg.toAddresses, []).join('; ');
       const cc = parseJsonField(msg.cc_addresses || msg.ccAddresses, []).join('; ');
@@ -463,17 +473,22 @@ ${rows}
       const d = msg.date ? new Date(msg.date) : null;
       const dateSent = d ? `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}` : '';
       const timeSent = d ? d.toTimeString().substring(0, 8) : '';
+      const dateRcvd = msg.acquired_at ? new Date(msg.acquired_at).toLocaleDateString('en-US') : '';
+      const timeRcvd = msg.acquired_at ? new Date(msg.acquired_at).toTimeString().substring(0, 8) : '';
       const folder = msg.folder || '';
       const hasAtt = msg.has_attachments || msg.hasAttachments ? 'TRUE' : 'FALSE';
-      const attCount = msg.attachment_count || msg.attachmentCount || 0;
       const size = msg.size || 0;
       const msgId = msg.message_id || msg.messageId || '';
+      const convIdx = msg.in_reply_to || '';
+      const parentId = msg.in_reply_to || '';
       const md5 = msg.hash_md5 || msg.hashMd5 || '';
       const sha256 = msg.hash_sha256 || msg.hashSha256 || '';
       const body = (msg.body_text || msg.bodyText || '').substring(0, 32000).replace(/[\r\n]+/g, ' ');
 
-      const vals = [msg.id, from, to, cc, bcc, subject, dateSent, timeSent,
-        folder, hasAtt, attCount, size, msgId, md5, sha256, body];
+      const vals = [msg.id, batesBegin, batesEnd, batesBegin, batesAttEnd || batesEnd,
+        msg.custodian || '', from, to, cc, bcc, subject, dateSent, timeSent,
+        dateRcvd, timeRcvd, folder, hasAtt, attCount, size, msgId, convIdx, parentId,
+        md5, sha256, body];
       return vals.map(v => `${Q}${String(v ?? '').replace(/ð/g, '')}${Q}`).join(D);
     });
 

@@ -105,7 +105,7 @@ function updateSidebar() {
 // --- Forensics Sub-tabs ---
 function switchForensicsTab(subtab) {
   document.querySelectorAll('#forensics-sub-tabs .sub-tab').forEach(t => t.classList.toggle('active', t.dataset.subtab === subtab));
-  ['qc', 'cloud', 'timestamps', 'integrity', 'timeline', 'relationships'].forEach(s => {
+  ['qc', 'cloud', 'timestamps', 'integrity', 'timeline', 'relationships', 'threading', 'dedup', 'custody'].forEach(s => {
     const el = document.getElementById(`forensics-${s}`);
     if (el) el.classList.toggle('active', s === subtab);
   });
@@ -305,6 +305,7 @@ async function viewMessage(msgId) {
       <div class="msg-forensic-bar">
         <div class="hash-item"><span class="hash-label">MD5:</span><span class="hash-value">${data.hash_md5 || 'N/A'}</span></div>
         <div class="hash-item"><span class="hash-label">SHA-256:</span><span class="hash-value">${data.hash_sha256 || 'N/A'}</span></div>
+        <button class="btn btn-sm" onclick="analyzeHeaders('${data.id}')" style="margin-left:auto;font-size:11px;padding:3px 10px;background:var(--bg-surface);border:1px solid var(--border);color:var(--accent);cursor:pointer;border-radius:4px" title="SPF/DKIM/DMARC verification, routing hops, red flags">Analyze Headers</button>
       </div>
       ${attachmentsHtml}
       <div class="msg-viewer-body">
@@ -1043,6 +1044,320 @@ function renderRelationships(data) {
       <tbody>${pairRows}</tbody>
     </table>
   `;
+}
+
+// ============================================================
+// FORENSICS: Email Threading
+// ============================================================
+
+async function loadThreading() {
+  if (!currentProject) { toast('Select a project first'); return; }
+  const statusEl = document.getElementById('threading-status');
+  statusEl.innerHTML = '<span style="color:var(--accent)">Analyzing threads...</span>';
+
+  try {
+    const data = await api(`/projects/${currentProject.id}/analytics/threading`);
+    statusEl.innerHTML = '';
+    renderThreading(data);
+  } catch (err) {
+    statusEl.innerHTML = `<span class="verify-fail">Failed: ${esc(err.message)}</span>`;
+  }
+}
+
+function renderThreading(data) {
+  const el = document.getElementById('threading-results');
+  if (data.totalMessages === 0) {
+    el.innerHTML = '<div class="empty-state" style="height:200px"><h3>No messages to thread</h3><p>Collect messages first.</p></div>';
+    return;
+  }
+
+  const threadRows = (data.threads || []).slice(0, 50).map((t, i) => `
+    <tr>
+      <td style="font-weight:500;color:var(--text-primary)">${i + 1}</td>
+      <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.rootSubject || '')}">${esc(t.rootSubject || '(no subject)')}</td>
+      <td style="font-family:var(--font-mono);font-size:11px">${esc(t.rootFrom || '')}</td>
+      <td style="text-align:center;font-weight:600;color:var(--accent)">${t.messageCount}</td>
+      <td style="font-size:11px;color:var(--text-muted)">${t.participants?.length || 0}</td>
+      <td style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted)">${t.dateRange?.from?.substring(0, 10) || ''} — ${t.dateRange?.to?.substring(0, 10) || ''}</td>
+      <td>${t.threadedBy === 'subject' ? '<span style="font-size:10px;padding:2px 6px;background:var(--warning);color:#000;border-radius:3px">Subject</span>' : '<span style="font-size:10px;padding:2px 6px;background:var(--success);color:#fff;border-radius:3px">Headers</span>'}</td>
+    </tr>
+  `).join('');
+
+  el.innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-label">Total Messages</div><div class="stat-value">${data.totalMessages}</div></div>
+      <div class="stat-card"><div class="stat-label">Conversations</div><div class="stat-value">${data.threadCount}</div></div>
+      <div class="stat-card"><div class="stat-label">Threaded</div><div class="stat-value">${data.threadedMessages}</div></div>
+      <div class="stat-card"><div class="stat-label">Standalone</div><div class="stat-value">${data.singleMessages}</div></div>
+    </div>
+    <h3 style="margin:20px 0 12px;font-size:14px">Conversations (by size)</h3>
+    <div style="max-height:500px;overflow-y:auto">
+      <table class="audit-table">
+        <thead><tr><th>#</th><th>Subject</th><th>Started By</th><th>Msgs</th><th>People</th><th>Date Range</th><th>Method</th></tr></thead>
+        <tbody>${threadRows || '<tr><td colspan="7" style="text-align:center;color:var(--text-muted)">No multi-message threads found</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+// ============================================================
+// FORENSICS: Deduplication
+// ============================================================
+
+async function loadDedup() {
+  if (!currentProject) { toast('Select a project first'); return; }
+  const statusEl = document.getElementById('dedup-status');
+  statusEl.innerHTML = '<span style="color:var(--accent)">Scanning for duplicates...</span>';
+
+  try {
+    const data = await api(`/projects/${currentProject.id}/analytics/dedup`);
+    statusEl.innerHTML = '';
+    renderDedup(data);
+  } catch (err) {
+    statusEl.innerHTML = `<span class="verify-fail">Failed: ${esc(err.message)}</span>`;
+  }
+}
+
+function renderDedup(data) {
+  const el = document.getElementById('dedup-results');
+  if (data.totalMessages === 0) {
+    el.innerHTML = '<div class="empty-state" style="height:200px"><h3>No messages to analyze</h3><p>Collect messages first.</p></div>';
+    return;
+  }
+
+  const exactRows = (data.exactGroups || []).slice(0, 30).map(d => `
+    <tr>
+      <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(d.subject || '')}">${esc(d.subject || '(no subject)')}</td>
+      <td style="font-family:var(--font-mono);font-size:11px">${esc(d.from || '')}</td>
+      <td style="text-align:center;font-weight:600;color:var(--warning)">${d.count}</td>
+      <td style="font-size:11px;color:var(--text-muted)">${esc((d.folders || []).join(', '))}</td>
+      <td style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted)">${d.hash?.substring(0, 12)}...</td>
+    </tr>
+  `).join('');
+
+  const savingsPct = parseFloat(data.dedupSavingsPercent) || 0;
+  const barColor = savingsPct > 20 ? 'var(--warning)' : 'var(--success)';
+
+  el.innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-label">Total Messages</div><div class="stat-value">${data.totalMessages}</div></div>
+      <div class="stat-card"><div class="stat-label">Unique</div><div class="stat-value" style="color:var(--success)">${data.uniqueMessages}</div></div>
+      <div class="stat-card"><div class="stat-label">Exact Duplicates</div><div class="stat-value" style="color:var(--warning)">${data.exactDuplicates}</div></div>
+      <div class="stat-card"><div class="stat-label">Near Duplicates</div><div class="stat-value" style="color:var(--text-muted)">${data.nearDuplicates}</div></div>
+    </div>
+
+    <div style="margin:20px 0;padding:16px;background:var(--bg-surface);border-radius:var(--radius);border:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:13px;font-weight:500">Dedup Savings</span>
+        <span style="font-weight:600;color:${barColor}">${data.dedupSavingsPercent}%</span>
+      </div>
+      <div style="height:20px;background:var(--bg-main);border-radius:10px;overflow:hidden">
+        <div style="height:100%;background:${barColor};border-radius:10px;width:${savingsPct}%;transition:width 0.3s"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--text-muted)">
+        <span>Algorithm: ${esc(data.hashAlgorithm)}</span>
+        <span>${data.exactDuplicates} removable duplicates</span>
+      </div>
+    </div>
+
+    <h3 style="margin:20px 0 12px;font-size:14px">Exact Duplicate Groups</h3>
+    <div style="max-height:400px;overflow-y:auto">
+      <table class="audit-table">
+        <thead><tr><th>Subject</th><th>From</th><th>Copies</th><th>Folders</th><th>Hash</th></tr></thead>
+        <tbody>${exactRows || '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No exact duplicates found</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+// ============================================================
+// FORENSICS: Chain of Custody
+// ============================================================
+
+async function loadCustody() {
+  if (!currentProject) { toast('Select a project first'); return; }
+  const statusEl = document.getElementById('custody-status');
+  statusEl.innerHTML = '<span style="color:var(--accent)">Generating report...</span>';
+
+  try {
+    const data = await api(`/projects/${currentProject.id}/chain-of-custody`);
+    statusEl.innerHTML = '';
+    renderCustody(data);
+  } catch (err) {
+    statusEl.innerHTML = `<span class="verify-fail">Failed: ${esc(err.message)}</span>`;
+  }
+}
+
+function renderCustody(data) {
+  const el = document.getElementById('custody-results');
+  const ci = data.caseInfo || {};
+  const es = data.evidenceSummary || {};
+  const ai = data.auditIntegrity || {};
+  const chain = data.custodyChain || [];
+  const stds = data.standards || {};
+
+  const chainRows = chain.map(e => `
+    <tr>
+      <td style="font-family:var(--font-mono);font-size:11px;white-space:nowrap">${esc(e.timestamp?.substring(0, 19).replace('T', ' ') || '')}</td>
+      <td><span style="padding:2px 8px;border-radius:3px;font-size:11px;font-weight:500;background:${e.event.includes('ERROR') || e.event.includes('FAIL') ? 'var(--error)' : 'var(--bg-surface)'};color:${e.event.includes('ERROR') ? '#fff' : 'var(--text-primary)'}">${esc(e.event)}</span></td>
+      <td style="font-size:12px">${esc(e.description)}</td>
+      <td style="font-size:11px;color:var(--text-muted)">${esc(e.handler)}</td>
+      <td style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted)">${esc((e.hashChain || '').substring(0, 12))}...</td>
+    </tr>
+  `).join('');
+
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h3 style="margin:0;font-size:16px">Chain of Custody Report</h3>
+      <span style="font-size:11px;color:var(--text-muted)">Generated: ${data.reportGenerated?.substring(0, 19).replace('T', ' ')}</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+      <div style="padding:16px;background:var(--bg-surface);border-radius:var(--radius);border:1px solid var(--border)">
+        <h4 style="margin:0 0 12px;font-size:13px;color:var(--accent)">Case Information</h4>
+        <div style="font-size:12px;line-height:2">
+          <div><span style="color:var(--text-muted);min-width:100px;display:inline-block">Project:</span> <strong>${esc(ci.projectName || '')}</strong></div>
+          <div><span style="color:var(--text-muted)">Case ID:</span> <strong>${esc(ci.caseId || 'N/A')}</strong></div>
+          <div><span style="color:var(--text-muted)">Evidence ID:</span> <strong>${esc(ci.evidenceId || 'N/A')}</strong></div>
+          <div><span style="color:var(--text-muted)">Custodian:</span> <strong>${esc(ci.custodian || 'N/A')}</strong></div>
+          <div><span style="color:var(--text-muted)">Examiner:</span> <strong>${esc(ci.examiner || 'N/A')}</strong></div>
+          <div><span style="color:var(--text-muted)">Target:</span> <strong>${esc(ci.targetEmail || '')}</strong></div>
+          <div><span style="color:var(--text-muted)">Legal Authority:</span> <strong>${esc(ci.legalAuthority || 'N/A')}</strong></div>
+        </div>
+      </div>
+      <div style="padding:16px;background:var(--bg-surface);border-radius:var(--radius);border:1px solid var(--border)">
+        <h4 style="margin:0 0 12px;font-size:13px;color:var(--accent)">Evidence Summary</h4>
+        <div style="font-size:12px;line-height:2">
+          <div><span style="color:var(--text-muted)">Total Messages:</span> <strong>${es.totalMessages || 0}</strong></div>
+          <div><span style="color:var(--text-muted)">Total Attachments:</span> <strong>${es.totalAttachments || 0}</strong></div>
+          <div><span style="color:var(--text-muted)">Total Size:</span> <strong>${formatBytes(es.totalSize || 0)}</strong></div>
+          <div><span style="color:var(--text-muted)">Date Range:</span> <strong>${es.dateRange ? esc(es.dateRange.earliest?.substring(0, 10) + ' — ' + es.dateRange.latest?.substring(0, 10)) : 'N/A'}</strong></div>
+          <div><span style="color:var(--text-muted)">Hash Algorithms:</span> <strong>${(es.hashAlgorithms || []).join(', ')}</strong></div>
+          <div><span style="color:var(--text-muted)">Hashed Messages:</span> <strong>${es.messagesWithHash || 0} / ${es.totalMessages || 0}</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="padding:12px 16px;margin-bottom:16px;border-radius:var(--radius);background:${ai.chainValid ? 'rgba(46,160,67,0.1)' : 'rgba(248,81,73,0.1)'};border:1px solid ${ai.chainValid ? 'var(--success)' : 'var(--error)'}">
+      <strong style="color:${ai.chainValid ? 'var(--success)' : 'var(--error)'}">Audit Chain: ${ai.chainValid ? 'VERIFIED ✓' : 'BROKEN ✗'}</strong>
+      <span style="margin-left:12px;font-size:12px;color:var(--text-muted)">${ai.totalEntries} entries | ${ai.hashAlgorithm} hash chain | ${ai.standard}</span>
+    </div>
+
+    <h4 style="margin:20px 0 8px;font-size:13px">Custody Events</h4>
+    <div style="max-height:350px;overflow-y:auto">
+      <table class="audit-table">
+        <thead><tr><th>Timestamp</th><th>Event</th><th>Description</th><th>Handler</th><th>Hash</th></tr></thead>
+        <tbody>${chainRows || '<tr><td colspan="5" style="text-align:center;color:var(--text-muted)">No custody events recorded</td></tr>'}</tbody>
+      </table>
+    </div>
+
+    <div style="margin-top:20px;padding:16px;background:var(--bg-surface);border-radius:var(--radius);border:1px solid var(--border)">
+      <h4 style="margin:0 0 8px;font-size:13px;color:var(--accent)">Applicable Standards</h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px">
+        <div><span style="color:var(--text-muted)">Collection:</span> ${esc(stds.collection || '')}</div>
+        <div><span style="color:var(--text-muted)">Hashing:</span> ${esc(stds.hashing || '')}</div>
+        <div><span style="color:var(--text-muted)">Audit:</span> ${esc(stds.auditTrail || '')}</div>
+        <div><span style="color:var(--text-muted)">Timestamp:</span> ${esc(stds.timestamping || '')}</div>
+        <div><span style="color:var(--text-muted)">Admissibility:</span> ${esc(stds.admissibility || '')}</div>
+        <div><span style="color:var(--text-muted)">Authentication:</span> ${esc(stds.authentication || '')}</div>
+      </div>
+    </div>
+
+    <div style="margin-top:20px;padding:16px;background:var(--bg-surface);border-radius:var(--radius);border:1px solid var(--border);border-left:3px solid var(--accent)">
+      <p style="font-style:italic;font-size:12px;margin:0 0 8px;color:var(--text-secondary)">${esc(data.certification?.statement || '')}</p>
+      <div style="font-size:12px;color:var(--text-muted)">
+        <strong>${esc(data.certification?.examiner || 'Examiner')}</strong> — ${data.certification?.date?.substring(0, 10) || ''}
+      </div>
+    </div>
+  `;
+}
+
+// ============================================================
+// MESSAGE: Header Analysis
+// ============================================================
+
+async function analyzeHeaders(msgId) {
+  if (!currentProject) return;
+  try {
+    const data = await api(`/projects/${currentProject.id}/messages/${msgId}/headers`);
+    showHeaderAnalysis(data);
+  } catch (err) {
+    toast(`Header analysis failed: ${err.message}`);
+  }
+}
+
+function showHeaderAnalysis(data) {
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+  const authBadge = (result) => {
+    const colors = { pass: 'var(--success)', fail: 'var(--error)', softfail: 'var(--warning)', none: 'var(--text-muted)', neutral: 'var(--text-muted)' };
+    return `<span style="padding:2px 8px;border-radius:3px;font-size:11px;font-weight:600;background:${colors[result] || 'var(--text-muted)'};color:#fff">${result.toUpperCase()}</span>`;
+  };
+
+  const hops = (data.receivedHops || []).map((h, i) => `
+    <div style="display:flex;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+      <span style="min-width:24px;font-weight:600;color:var(--accent)">#${i + 1}</span>
+      <div style="flex:1">
+        <div><span style="color:var(--text-muted)">From:</span> <span style="font-family:var(--font-mono)">${esc(h.from || 'unknown')}</span></div>
+        <div><span style="color:var(--text-muted)">By:</span> <span style="font-family:var(--font-mono)">${esc(h.by || 'unknown')}</span></div>
+        ${h.ip ? `<div><span style="color:var(--text-muted)">IP:</span> <span style="font-family:var(--font-mono);color:var(--accent)">${esc(h.ip)}</span></div>` : ''}
+        ${h.date ? `<div><span style="color:var(--text-muted)">Time:</span> ${esc(h.date)}</div>` : ''}
+      </div>
+    </div>
+  `).join('');
+
+  const flags = (data.redFlags || []).map(f => {
+    const sev = { critical: 'var(--error)', warning: 'var(--warning)', info: 'var(--accent)' };
+    return `<div style="padding:8px 12px;margin-bottom:6px;border-radius:var(--radius);background:${f.severity === 'critical' ? 'rgba(248,81,73,0.15)' : f.severity === 'warning' ? 'rgba(210,153,34,0.15)' : 'rgba(88,166,255,0.1)'};border-left:3px solid ${sev[f.severity] || 'var(--text-muted)'}">
+      <strong style="font-size:11px;color:${sev[f.severity]}">${esc(f.type)}</strong>
+      <div style="font-size:12px;margin-top:2px">${esc(f.description)}</div>
+    </div>`;
+  }).join('');
+
+  const xHeaders = (data.xHeaders || []).slice(0, 15).map(h =>
+    `<div style="font-size:11px;padding:2px 0;border-bottom:1px solid var(--border)"><span style="color:var(--accent);font-family:var(--font-mono)">${esc(h.name)}</span>: <span style="color:var(--text-secondary)">${esc(String(h.value).substring(0, 100))}</span></div>`
+  ).join('');
+
+  modal.innerHTML = `
+    <div style="background:var(--bg-main);border:1px solid var(--border);border-radius:8px;width:700px;max-height:85vh;overflow-y:auto;padding:24px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h3 style="margin:0;font-size:16px">Email Header Analysis</h3>
+        <button onclick="this.closest('div[style*=fixed]').remove()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px">✕</button>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:16px">
+        <strong>${esc(data.subject || '')}</strong><br>From: ${esc(data.from || '')} | ${esc(data.date || '')}
+      </div>
+
+      <h4 style="margin:0 0 8px;font-size:13px">Authentication Results</h4>
+      <div style="display:flex;gap:16px;margin-bottom:16px;padding:12px;background:var(--bg-surface);border-radius:var(--radius)">
+        <div style="text-align:center"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">SPF</div>${authBadge(data.authentication?.spf || 'none')}</div>
+        <div style="text-align:center"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">DKIM</div>${authBadge(data.authentication?.dkim || 'none')}</div>
+        <div style="text-align:center"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">DMARC</div>${authBadge(data.authentication?.dmarc || 'none')}</div>
+        ${data.dkimDomain ? `<div style="margin-left:auto;font-size:11px;color:var(--text-muted)">Signed by: <strong style="color:var(--text-primary)">${esc(data.dkimDomain)}</strong></div>` : ''}
+      </div>
+
+      ${flags ? `<h4 style="margin:0 0 8px;font-size:13px">Red Flags (${data.redFlags?.length || 0})</h4><div style="margin-bottom:16px">${flags}</div>` : ''}
+
+      <h4 style="margin:0 0 8px;font-size:13px">Routing Hops (${data.receivedHops?.length || 0})</h4>
+      <div style="margin-bottom:16px;padding:0 8px">${hops || '<div style="color:var(--text-muted);font-size:12px">No Received headers found</div>'}</div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+        <div>
+          <h4 style="margin:0 0 4px;font-size:12px;color:var(--text-muted)">Return-Path</h4>
+          <div style="font-family:var(--font-mono);font-size:11px">${esc(data.returnPath || 'N/A')}</div>
+        </div>
+        <div>
+          <h4 style="margin:0 0 4px;font-size:12px;color:var(--text-muted)">Reply-To</h4>
+          <div style="font-family:var(--font-mono);font-size:11px">${esc(data.replyTo || 'N/A')}</div>
+        </div>
+      </div>
+
+      ${xHeaders ? `<h4 style="margin:0 0 8px;font-size:13px">X-Headers</h4><div style="max-height:200px;overflow-y:auto">${xHeaders}</div>` : ''}
+    </div>
+  `;
+  document.body.appendChild(modal);
 }
 
 // ============================================================

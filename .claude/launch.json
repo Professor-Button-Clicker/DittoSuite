@@ -4,8 +4,9 @@
     {
       "name": "sherlock-mail",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["sherlock-mail/server.js"],
-      "port": 3000
+      "runtimeArgs": ["server.js"],
+      "port": 3000,
+      "cwd": "Tools/SherlockMail"
     }
   ]
 }
