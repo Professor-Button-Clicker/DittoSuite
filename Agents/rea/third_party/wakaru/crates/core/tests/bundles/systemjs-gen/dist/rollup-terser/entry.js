@@ -1,1 +1,0 @@
-System.register([],(function(e){"use strict";return{execute:function(){e("Before",0),{[key()]:handler}[lookup()](),e("After",1)}}}));

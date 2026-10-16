@@ -1,5 +1,0 @@
----
-source: crates/core/tests/metro_unpack.rs
-expression: code
----
-export default "default-value";

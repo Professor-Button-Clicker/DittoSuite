@@ -1,1 +1,0 @@
-exports.id=529,exports.ids=[529],exports.modules={529(e,o){o.greet=function(e){return`Hello, ${e}!`}}};

@@ -1,5 +1,0 @@
----
-source: crates/core/tests/un_esm_rule.rs
-expression: output
----
-export { take } from "./effects.js";

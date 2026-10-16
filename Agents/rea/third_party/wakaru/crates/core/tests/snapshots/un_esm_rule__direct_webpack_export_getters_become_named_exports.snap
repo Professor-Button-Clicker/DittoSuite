@@ -1,8 +1,0 @@
----
-source: crates/core/tests/un_esm_rule.rs
-expression: output
----
-export const APP_NAME = "Revenue Console";
-export function readSetting(t, e = null) {
-    return e;
-}

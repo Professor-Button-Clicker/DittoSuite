@@ -1,4 +1,0 @@
-
-## Testcase
-
-- Browserify
