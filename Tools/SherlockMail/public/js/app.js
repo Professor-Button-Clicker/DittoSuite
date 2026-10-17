@@ -339,8 +339,25 @@ async function createProject(e) {
     document.getElementById('provider-result').innerHTML = '';
     await selectProject(result.id);
     loadSystemInfo();
+
+    switchTab('collect');
+    prefillCollectWizard(currentProject);
   } catch (err) {
     toast('Failed to create project: ' + err.message);
+  }
+}
+
+function prefillCollectWizard(project) {
+  if (!project) return;
+
+  const email = project.target_email || project.targetEmail || '';
+  document.getElementById('wiz-email').value = email;
+
+  if (email && email.includes('@')) {
+    const domain = email.split('@')[1].toLowerCase();
+    const providerId = PROVIDER_MAP[domain] || 'other';
+    document.getElementById('wiz-provider').value = providerId;
+    wizProviderChanged();
   }
 }
 
