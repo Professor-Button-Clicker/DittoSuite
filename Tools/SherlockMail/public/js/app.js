@@ -2086,7 +2086,7 @@ function wizShowResults(result) {
 async function wizOpenOutputFolder() {
   const folderPath = wizOutputDir || `./output/${currentProject?.id || ''}`;
   try {
-    await api('/open-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: folderPath }) });
+    await api('/open-folder', { method: 'POST', body: { path: folderPath } });
   } catch (err) {
     toast('Could not open folder: ' + err.message);
   }
