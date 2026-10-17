@@ -235,17 +235,20 @@ function showProjectDetail() {
   document.getElementById('det-name').value = p.name || '';
   document.getElementById('det-email').value = p.target_email || '';
   document.getElementById('det-provider').value = p.provider_type || 'imap';
-  document.getElementById('det-status').value = p.status || '';
+  document.getElementById('det-auth-method').value = config.authMethod || 'password';
   document.getElementById('det-case-id').value = p.case_id || '';
-  document.getElementById('det-case-name').value = p.case_name || '';
+  document.getElementById('det-evidence-id').value = config.evidenceId || '';
+  document.getElementById('det-custodian').value = config.custodianName || '';
   document.getElementById('det-examiner').value = p.examiner_name || '';
-  document.getElementById('det-agency').value = p.agency || '';
-  document.getElementById('det-legal-authority').value = p.legal_authority || '';
-  document.getElementById('det-legal-scope').value = p.legal_scope || '';
+
+  const badge = document.getElementById('det-status-badge');
+  badge.textContent = (p.status || '').toUpperCase();
+  badge.className = `project-status status-${p.status}`;
 
   const hasCollected = ['completed', 'exported'].includes(p.status);
   const locked = document.getElementById('project-edit-locked');
   locked.style.display = hasCollected ? '' : 'none';
+  document.getElementById('det-provider-result').innerHTML = '';
 
   switchTab('project-detail');
   document.getElementById('message-list-title').textContent = p.name;
@@ -262,11 +265,10 @@ async function saveProjectDetails(e) {
         target_email: document.getElementById('det-email').value,
         provider_type: document.getElementById('det-provider').value,
         case_id: document.getElementById('det-case-id').value,
-        case_name: document.getElementById('det-case-name').value,
         examiner_name: document.getElementById('det-examiner').value,
-        agency: document.getElementById('det-agency').value,
-        legal_authority: document.getElementById('det-legal-authority').value,
-        legal_scope: document.getElementById('det-legal-scope').value,
+        evidenceId: document.getElementById('det-evidence-id').value,
+        custodianName: document.getElementById('det-custodian').value,
+        authMethod: document.getElementById('det-auth-method').value,
       }
     });
     currentProject = updated;
@@ -502,6 +504,31 @@ async function detectEmailProvider() {
           <div class="provider-name">${esc(result.provider.name)}</div>
           <div class="provider-detail">Recommended: ${rec?.protocol || 'imap'} | OAuth: ${result.provider.oauthRequired ? 'Required' : 'Optional'}</div>
           ${result.provider.notes ? `<div class="provider-detail">${esc(result.provider.notes)}</div>` : ''}
+          ${preset.host ? `<div class="provider-detail">IMAP: ${preset.host}:${preset.port || 993}</div>` : ''}
+        </div>`;
+    } else {
+      el.innerHTML = '<span style="color:var(--danger)">Could not detect provider</span>';
+    }
+  } catch {
+    el.innerHTML = '<span style="color:var(--danger)">Detection failed</span>';
+  }
+}
+
+async function detectEmailProviderDetail() {
+  const email = document.getElementById('det-email').value;
+  if (!email) return;
+  const el = document.getElementById('det-provider-result');
+  el.innerHTML = '<span style="color:var(--text-muted)">Detecting provider...</span>';
+  try {
+    const result = await api(`/providers/detect?email=${encodeURIComponent(email)}`);
+    if (result.provider) {
+      const rec = result.recommended;
+      document.getElementById('det-provider').value = rec?.protocol || 'imap';
+      const preset = rec?.preset || {};
+      el.innerHTML = `
+        <div class="provider-result">
+          <div class="provider-name">${esc(result.provider.name)}</div>
+          <div class="provider-detail">Recommended: ${rec?.protocol || 'imap'} | OAuth: ${result.provider.oauthRequired ? 'Required' : 'Optional'}</div>
           ${preset.host ? `<div class="provider-detail">IMAP: ${preset.host}:${preset.port || 993}</div>` : ''}
         </div>`;
     } else {

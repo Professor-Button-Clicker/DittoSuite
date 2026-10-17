@@ -159,18 +159,25 @@
 
         <!-- Project Detail Panel -->
         <div id="view-project-detail" class="panel-view">
-          <h2 id="project-detail-title">Project Details</h2>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px">
+            <h2 id="project-detail-title" style="margin:0">Project Details</h2>
+            <span class="project-status" id="det-status-badge" style="font-size:11px"></span>
+          </div>
           <div id="project-edit-locked" style="display:none;margin-bottom:16px;padding:10px 14px;border-radius:8px;background:var(--bg-surface);border:1px solid var(--warning);color:var(--warning);font-size:13px">
             Warning: This project has completed collections. Any changes will be recorded in the Chain of Custody log as a post-collection modification.
           </div>
           <form id="project-detail-form" onsubmit="saveProjectDetails(event)">
             <div class="form-group">
               <label>Project Name</label>
-              <input type="text" id="det-name" required placeholder="Project name">
+              <input type="text" id="det-name" required placeholder="e.g. Case 2024-001 Email Preservation">
             </div>
             <div class="form-group">
               <label>Target Email Address</label>
-              <input type="email" id="det-email" required placeholder="target@example.com">
+              <div style="display:flex;gap:8px;max-width:500px">
+                <input type="email" id="det-email" required placeholder="target@example.com" style="flex:1">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="detectEmailProviderDetail()">Detect Provider</button>
+              </div>
+              <div id="det-provider-result"></div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:500px">
               <div class="form-group">
@@ -186,8 +193,12 @@
                 </select>
               </div>
               <div class="form-group">
-                <label>Status</label>
-                <input type="text" id="det-status" disabled style="text-transform:uppercase;font-weight:600">
+                <label>Auth Method</label>
+                <select id="det-auth-method">
+                  <option value="password">Password</option>
+                  <option value="app-password">App-Specific Password</option>
+                  <option value="oauth2">OAuth 2.0</option>
+                </select>
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:500px">
@@ -196,28 +207,18 @@
                 <input type="text" id="det-case-id" placeholder="C1231234">
               </div>
               <div class="form-group">
-                <label>Case Name</label>
-                <input type="text" id="det-case-name" placeholder="Case name">
+                <label>Evidence ID</label>
+                <input type="text" id="det-evidence-id" placeholder="999-0001">
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:500px">
+              <div class="form-group">
+                <label>Custodian Name</label>
+                <input type="text" id="det-custodian" placeholder="Custodian name">
+              </div>
               <div class="form-group">
                 <label>Examiner Name</label>
                 <input type="text" id="det-examiner" placeholder="Examiner name">
-              </div>
-              <div class="form-group">
-                <label>Agency / Organization</label>
-                <input type="text" id="det-agency" placeholder="Agency">
-              </div>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:500px">
-              <div class="form-group">
-                <label>Legal Authority</label>
-                <input type="text" id="det-legal-authority" placeholder="e.g. Subpoena, Court Order">
-              </div>
-              <div class="form-group">
-                <label>Legal Scope</label>
-                <input type="text" id="det-legal-scope" placeholder="Scope of collection">
               </div>
             </div>
             <div id="project-detail-actions" style="margin-top:24px;display:flex;gap:12px">

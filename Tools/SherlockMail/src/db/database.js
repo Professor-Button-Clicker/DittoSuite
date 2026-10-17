@@ -145,11 +145,27 @@ export function updateProject(id, fields, examiner) {
       sets.push(`${key} = ?`);
     }
   }
-  if (sets.length === 0) return project;
+
+  const config = JSON.parse(project.config || '{}');
+  const configFields = ['evidenceId', 'custodianName', 'authMethod'];
+  let configChanged = false;
+  for (const key of configFields) {
+    if (key in fields && fields[key] !== (config[key] || '')) {
+      changes[key] = { from: config[key] || '', to: fields[key] };
+      config[key] = fields[key];
+      configChanged = true;
+    }
+  }
+
+  if (Object.keys(changes).length === 0) return project;
 
   const now = new Date().toISOString();
+  if (configChanged) {
+    sets.push('config = ?');
+  }
   sets.push('updated_at = ?');
-  const values = Object.keys(changes).map(k => fields[k]);
+  const values = Object.keys(changes).filter(k => allowed.includes(k)).map(k => fields[k]);
+  if (configChanged) values.push(JSON.stringify(config));
   values.push(now, id);
   d.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...values);
 
