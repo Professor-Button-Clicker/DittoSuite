@@ -1789,7 +1789,7 @@ function wizSaveConnection() {
   if (protocol === 'imap' || protocol === 'pop3') {
     wizConnection.host = document.getElementById('wiz-host').value;
     wizConnection.port = parseInt(document.getElementById('wiz-port').value) || 993;
-    wizConnection.username = document.getElementById('wiz-username')?.value || undefined;
+    wizConnection.username = document.getElementById('wiz-username')?.value || wizConnection.email;
     wizConnection.tls = document.getElementById('wiz-tls')?.checked !== false;
     wizConnection.password = password;
   }

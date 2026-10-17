@@ -68,7 +68,7 @@ export class Pop3Handler {
   }
 
   async connect() {
-    const { host, port, username, password, useTls } = this.config;
+    const { host, port, username, password, useTls, email } = this.config;
     const connectPort = port || (useTls !== false ? 995 : 110);
 
     return new Promise((resolve, reject) => {
@@ -84,7 +84,7 @@ export class Pop3Handler {
             this.socket.on('data', onData);
           });
 
-          await this.sendCommand(`USER ${username}`);
+          await this.sendCommand(`USER ${username || email}`);
           await this.sendCommand(`PASS ${password}`);
 
           const stat = await this.sendCommand('STAT');

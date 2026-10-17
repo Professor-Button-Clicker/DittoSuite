@@ -19,13 +19,13 @@ export class ImapHandler {
   }
 
   async connect() {
-    const { host, port, username, password, tls } = this.config;
+    const { host, port, username, password, tls, email } = this.config;
 
     this.client = new ImapFlow({
       host,
       port: port || (tls !== false ? 993 : 143),
       secure: tls !== false,
-      auth: { user: username, pass: password },
+      auth: { user: username || email, pass: password },
       logger: {
         debug: (msg) => this.log('DEBUG', msg),
         info: (msg) => this.log('INFO', msg),
