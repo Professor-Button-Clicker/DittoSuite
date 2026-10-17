@@ -105,7 +105,7 @@ function updateSidebar() {
 // --- Forensics Sub-tabs ---
 function switchForensicsTab(subtab) {
   document.querySelectorAll('#forensics-sub-tabs .sub-tab').forEach(t => t.classList.toggle('active', t.dataset.subtab === subtab));
-  ['qc', 'cloud', 'timestamps', 'integrity', 'timeline', 'relationships', 'threading', 'dedup', 'custody'].forEach(s => {
+  ['combined', 'qc', 'cloud', 'timestamps', 'integrity', 'timeline', 'relationships', 'threading', 'dedup', 'custody'].forEach(s => {
     const el = document.getElementById(`forensics-${s}`);
     if (el) el.classList.toggle('active', s === subtab);
   });
@@ -649,13 +649,155 @@ async function loadExportHistory() {
 }
 
 // ============================================================
+// FORENSICS: Combined QC
+// ============================================================
+
+async function runCombinedQC() {
+  if (!currentProject) { toast('Select a project first'); return; }
+  const statusEl = document.getElementById('combined-qc-status');
+  const resultsEl = document.getElementById('combined-qc-results');
+  statusEl.innerHTML = '<span style="color:var(--accent)">Running all checks...</span>';
+  resultsEl.innerHTML = '';
+
+  const sections = [];
+  let totalPass = 0, totalWarn = 0, totalFail = 0;
+
+  try {
+    const qc = await api(`/projects/${currentProject.id}/qc`, { method: 'POST' });
+    const s = qc.summary || {};
+    totalPass += s.passed || 0;
+    totalWarn += s.warnings || 0;
+    totalFail += s.failed || 0;
+    sections.push({ title: 'Quality Control (11 Checks)', status: qc.overallStatus, checks: qc.checks || [] });
+  } catch (e) {
+    sections.push({ title: 'Quality Control', status: 'fail', checks: [{ name: 'Quality Control', status: 'fail', detail: e.message }] });
+    totalFail++;
+  }
+
+  statusEl.innerHTML = '<span style="color:var(--accent)">Running cloud scan...</span>';
+  try {
+    const cloud = await api(`/projects/${currentProject.id}/cloud-scan`, { method: 'POST' });
+    const linkCount = cloud.totalLinks || 0;
+    const status = linkCount > 0 ? 'warning' : 'pass';
+    if (status === 'pass') totalPass++; else totalWarn++;
+    sections.push({ title: 'Cloud Attachment Scan', status, checks: [
+      { name: 'Cloud Links Detected', status, detail: linkCount > 0 ? `${linkCount} cloud link(s) found across ${cloud.messagesWithLinks || 0} message(s) — review for completeness` : 'No cloud attachment links detected' }
+    ]});
+  } catch (e) {
+    sections.push({ title: 'Cloud Attachment Scan', status: 'fail', checks: [{ name: 'Cloud Scan', status: 'fail', detail: e.message }] });
+    totalFail++;
+  }
+
+  statusEl.innerHTML = '<span style="color:var(--accent)">Verifying evidence integrity...</span>';
+  try {
+    const integrity = await api(`/projects/${currentProject.id}/verify`);
+    const hv = integrity.hashVerification || {};
+    const chain = integrity.auditLogIntegrity || {};
+    const chainValid = chain.chainVerified?.valid;
+    const hashOk = hv.preserved === hv.total;
+    const checks = [];
+    checks.push({ name: `Hash Integrity (${hv.algorithm || 'SHA-256'})`, status: hashOk ? 'pass' : 'warning', detail: `${hv.preserved}/${hv.total} hashes preserved` });
+    checks.push({ name: 'Audit Chain Integrity', status: chainValid ? 'pass' : 'fail', detail: `${chain.totalEntries || 0} entries verified` });
+    if (integrity.exportIntegrity?.length) {
+      for (const exp of integrity.exportIntegrity) {
+        const valid = exp.valid !== false;
+        checks.push({ name: `Export: ${exp.format?.toUpperCase() || 'Unknown'}`, status: valid ? 'pass' : 'fail', detail: exp.error || 'Files verified' });
+      }
+    }
+    checks.push({ name: 'RFC 3161 Timestamps', status: (integrity.timestampRecords || 0) > 0 ? 'pass' : 'warning', detail: `${integrity.timestampRecords || 0} timestamp record(s) on file` });
+    for (const c of checks) { if (c.status === 'pass') totalPass++; else if (c.status === 'warning') totalWarn++; else totalFail++; }
+    const worstStatus = checks.some(c => c.status === 'fail') ? 'fail' : checks.some(c => c.status === 'warning') ? 'warning' : 'pass';
+    sections.push({ title: 'Evidence Integrity', status: worstStatus, checks });
+  } catch (e) {
+    sections.push({ title: 'Evidence Integrity', status: 'fail', checks: [{ name: 'Integrity Verification', status: 'fail', detail: e.message }] });
+    totalFail++;
+  }
+
+  statusEl.innerHTML = '<span style="color:var(--accent)">Analyzing threads...</span>';
+  try {
+    const threads = await api(`/projects/${currentProject.id}/analytics/threading`);
+    const threadStatus = threads.totalMessages === 0 ? 'warning' : 'pass';
+    if (threadStatus === 'pass') totalPass++; else totalWarn++;
+    sections.push({ title: 'Email Threading', status: threadStatus, checks: [
+      { name: 'Thread Analysis', status: threadStatus, detail: threads.totalMessages === 0 ? 'No messages to thread' : `${threads.threadCount} conversation(s) from ${threads.totalMessages} messages, ${threads.threadedMessages} threaded, ${threads.singleMessages} standalone` }
+    ]});
+  } catch (e) {
+    sections.push({ title: 'Email Threading', status: 'fail', checks: [{ name: 'Thread Analysis', status: 'fail', detail: e.message }] });
+    totalFail++;
+  }
+
+  statusEl.innerHTML = '<span style="color:var(--accent)">Scanning for duplicates...</span>';
+  try {
+    const dedup = await api(`/projects/${currentProject.id}/analytics/dedup`);
+    const dupStatus = dedup.totalMessages === 0 ? 'warning' : (dedup.exactDuplicates || 0) > 0 ? 'warning' : 'pass';
+    if (dupStatus === 'pass') totalPass++; else totalWarn++;
+    sections.push({ title: 'Deduplication', status: dupStatus, checks: [
+      { name: 'Duplicate Detection', status: dupStatus, detail: dedup.totalMessages === 0 ? 'No messages to analyze' : `${dedup.uniqueMessages} unique, ${dedup.exactDuplicates} exact duplicate(s), ${dedup.nearDuplicates} near duplicate(s) — ${dedup.dedupSavingsPercent}% savings` }
+    ]});
+  } catch (e) {
+    sections.push({ title: 'Deduplication', status: 'fail', checks: [{ name: 'Duplicate Detection', status: 'fail', detail: e.message }] });
+    totalFail++;
+  }
+
+  const overallStatus = totalFail > 0 ? 'fail' : totalWarn > 0 ? 'warning' : 'pass';
+  const statusColor = overallStatus === 'pass' ? 'var(--success)' : overallStatus === 'warning' ? 'var(--warning)' : 'var(--danger)';
+  const statusText = overallStatus === 'pass' ? 'ALL CHECKS PASSED' : overallStatus === 'warning' ? 'PASSED WITH WARNINGS' : 'ISSUES FOUND';
+
+  let html = `
+    <div style="margin-bottom:24px">
+      <h3 style="margin-bottom:12px">Combined Result: <span style="color:${statusColor};font-weight:700">${statusText}</span></h3>
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-label">Passed</div><div class="stat-value" style="color:var(--success)">${totalPass}</div></div>
+        <div class="stat-card"><div class="stat-label">Warnings</div><div class="stat-value" style="color:var(--warning)">${totalWarn}</div></div>
+        <div class="stat-card"><div class="stat-label">Failed</div><div class="stat-value" style="color:var(--danger)">${totalFail}</div></div>
+        <div class="stat-card"><div class="stat-label">Sections</div><div class="stat-value">${sections.length}</div></div>
+      </div>
+    </div>`;
+
+  for (const section of sections) {
+    const sColor = section.status === 'pass' ? 'var(--success)' : section.status === 'warning' ? 'var(--warning)' : 'var(--danger)';
+    const sIcon = section.status === 'pass' ? '&#10003;' : section.status === 'warning' ? '&#9888;' : '&#10007;';
+    html += `<div style="margin-bottom:20px">
+      <h3 style="font-size:14px;margin-bottom:10px;display:flex;align-items:center;gap:8px">
+        <span style="color:${sColor}">${sIcon}</span> ${esc(section.title)}
+      </h3>`;
+    for (const check of section.checks) {
+      const cls = check.status === 'pass' ? 'qc-pass' : check.status === 'warning' ? 'qc-warning' : 'qc-fail';
+      const icon = check.status === 'pass' ? '&#10003;' : check.status === 'warning' ? '&#9888;' : '&#10007;';
+      html += `
+        <div class="qc-check ${cls}">
+          <div class="qc-icon">${icon}</div>
+          <div>
+            <div class="qc-name">${esc(check.name)}</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${esc(check.detail || '')}</div>
+          </div>
+          <div class="qc-detail">${check.status.toUpperCase()}</div>
+        </div>`;
+    }
+    html += '</div>';
+  }
+
+  html += `<div style="margin-top:24px;padding:16px;background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--radius)">
+    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px">Combined QC Summary</div>
+    <div style="font-size:12px;color:var(--text-secondary);line-height:1.8">
+      <div>Sections Run: <strong style="color:var(--text-primary)">QC &bull; Cloud Scan &bull; Integrity &bull; Threading &bull; Dedup</strong></div>
+      <div>Total Checks: <strong style="color:var(--text-primary)">${totalPass + totalWarn + totalFail}</strong></div>
+      <div>Standards: <strong style="color:var(--text-primary)">ISO 27037, NIST SP 800-86, SWGDE, ACPO, FRE 901/902</strong></div>
+    </div>
+  </div>`;
+
+  resultsEl.innerHTML = html;
+  statusEl.innerHTML = `<span style="color:${statusColor}">${statusText}</span>`;
+}
+
+// ============================================================
 // FORENSICS: Quality Control
 // ============================================================
 
 async function runQualityControl() {
   if (!currentProject) { toast('Select a project first'); return; }
   const statusEl = document.getElementById('qc-status');
-  statusEl.innerHTML = '<span style="color:var(--accent)">Running 9-point QC...</span>';
+  statusEl.innerHTML = '<span style="color:var(--accent)">Running 11-point QC...</span>';
 
   try {
     const results = await api(`/projects/${currentProject.id}/qc`, { method: 'POST' });

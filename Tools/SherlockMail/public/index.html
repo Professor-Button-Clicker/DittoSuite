@@ -737,7 +737,8 @@
 
           <!-- Forensics Sub-tabs -->
           <div class="sub-tabs" id="forensics-sub-tabs">
-            <div class="sub-tab active" data-subtab="qc" onclick="switchForensicsTab('qc')">Quality Control</div>
+            <div class="sub-tab active" data-subtab="combined" onclick="switchForensicsTab('combined')">Combined QC</div>
+            <div class="sub-tab" data-subtab="qc" onclick="switchForensicsTab('qc')">Quality Control</div>
             <div class="sub-tab" data-subtab="cloud" onclick="switchForensicsTab('cloud')">Cloud Attachments</div>
             <div class="sub-tab" data-subtab="timestamps" onclick="switchForensicsTab('timestamps')">RFC 3161 Timestamps</div>
             <div class="sub-tab" data-subtab="integrity" onclick="switchForensicsTab('integrity')">Evidence Integrity</div>
@@ -748,9 +749,20 @@
             <div class="sub-tab" data-subtab="custody" onclick="switchForensicsTab('custody')">Custody</div>
           </div>
 
+          <!-- Combined QC Sub-panel -->
+          <div class="sub-panel active" id="forensics-combined">
+            <h3 style="margin-bottom:16px">Combined QC Check</h3>
+            <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Runs all forensic checks in one pass: 11-Point QC, Cloud Attachment Scan, Evidence Integrity Verification, Email Threading, and Deduplication Analysis. Produces a unified forensic readiness report.</p>
+            <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px">
+              <button class="btn btn-primary" onclick="runCombinedQC()">Run Combined QC</button>
+              <span id="combined-qc-status"></span>
+            </div>
+            <div id="combined-qc-results"></div>
+          </div>
+
           <!-- QC Sub-panel -->
-          <div class="sub-panel active" id="forensics-qc">
-            <h3 style="margin-bottom:16px">Quality Control (9 Checks)</h3>
+          <div class="sub-panel" id="forensics-qc">
+            <h3 style="margin-bottom:16px">Quality Control (11 Checks)</h3>
             <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px">
               <button class="btn btn-primary" onclick="runQualityControl()">Run QC Checks</button>
               <span id="qc-status"></span>
