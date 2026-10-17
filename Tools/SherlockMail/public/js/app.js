@@ -86,6 +86,7 @@ function switchTab(tab) {
   if (tab === 'audit' && currentProject) loadAuditLog();
   if (tab === 'search') document.getElementById('adv-search-input')?.focus();
   if (tab === 'collect' && !currentProject) toast('Select a project first to begin collection');
+  if (tab === 'collect' && currentProject) prefillCollectWizard(currentProject);
   if (tab === 'export' && currentProject) loadExportHistory();
   if (tab === 'forensics' && !currentProject) toast('Select a project first');
 
