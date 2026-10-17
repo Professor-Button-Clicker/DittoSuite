@@ -1791,11 +1791,7 @@ function wizSaveConnection() {
     wizConnection.port = parseInt(document.getElementById('wiz-port').value) || 993;
     wizConnection.username = document.getElementById('wiz-username')?.value || undefined;
     wizConnection.tls = document.getElementById('wiz-tls')?.checked !== false;
-    if (authMethod === 'app-password') {
-      wizConnection.appPassword = password;
-    } else {
-      wizConnection.password = password;
-    }
+    wizConnection.password = password;
   }
 }
 
