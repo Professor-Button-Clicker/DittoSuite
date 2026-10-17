@@ -588,14 +588,31 @@ async function verifyChain() {
 // EXPORT TAB
 // ============================================================
 
+function togglePdfSplitMode() {
+  const format = document.getElementById('export-format').value;
+  const group = document.getElementById('pdf-split-group');
+  if (group) group.style.display = format === 'pdf' ? '' : 'none';
+}
+
+function toggleWizPdfSplit() {
+  const checked = document.querySelector('input[name="wiz-format"][value="pdf"]')?.checked;
+  const el = document.getElementById('wiz-pdf-options');
+  if (el) el.style.display = checked ? '' : 'none';
+}
+
 async function runExport() {
   if (!currentProject) { toast('Select a project first'); return; }
   const format = document.getElementById('export-format').value;
   const statusEl = document.getElementById('export-status');
   statusEl.innerHTML = '<span style="color:var(--accent)">Exporting...</span>';
 
+  const body = { format };
+  if (format === 'pdf') {
+    body.pdfSplitMode = document.getElementById('pdf-split-mode').value;
+  }
+
   try {
-    const result = await api(`/projects/${currentProject.id}/export`, { method: 'POST', body: { format } });
+    const result = await api(`/projects/${currentProject.id}/export`, { method: 'POST', body });
     statusEl.innerHTML = '<span class="verify-pass">Export complete</span>';
     renderExportResult(result);
     loadExportHistory();
@@ -2110,6 +2127,7 @@ async function wizExport() {
   try {
     const body = { format };
     if (outputDir) body.outputDir = outputDir;
+    if (format === 'pdf') body.pdfSplitMode = document.getElementById('wiz-pdf-split-mode')?.value || 'thread';
     const result = await api(`/projects/${currentProject.id}/export`, { method: 'POST', body });
     if (statusEl) statusEl.innerHTML = '<span class="verify-pass">Export complete</span>';
     const el = document.getElementById('wiz-export-result');
@@ -2132,10 +2150,12 @@ async function wizAutoExport() {
   if (formats.length === 0 || !currentProject) return;
   const outputDir = wizOutputDir || '';
   const results = [];
+  const pdfSplitMode = document.getElementById('wiz-pdf-split-mode')?.value || 'thread';
   for (const format of formats) {
     try {
       const body = { format };
       if (outputDir) body.outputDir = outputDir;
+      if (format === 'pdf') body.pdfSplitMode = pdfSplitMode;
       const result = await api(`/projects/${currentProject.id}/export`, { method: 'POST', body });
       results.push({ format, success: true, files: result.files?.length || 0, totalBytes: result.totalBytes || 0 });
     } catch (err) {

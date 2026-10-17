@@ -100,7 +100,7 @@ export class ExportService {
     return dir;
   }
 
-  static exportToFiles(projectId, exportId, format, messages, folders, customOutputDir) {
+  static exportToFiles(projectId, exportId, format, messages, folders, customOutputDir, options = {}) {
     let outputDir;
     if (customOutputDir) {
       outputDir = path.join(customOutputDir, format);
@@ -156,9 +156,26 @@ export class ExportService {
       }
 
       case 'pdf': {
-        const threads = this._groupByThread(messages);
-        for (const thread of threads) {
-          const result = this.generatePdf(thread.messages, projectId, thread.subject);
+        const splitMode = options.pdfSplitMode || 'thread';
+        let groups;
+        switch (splitMode) {
+          case 'all':
+            groups = [{ label: null, messages }];
+            break;
+          case 'folder':
+            groups = this._groupByFolder(messages);
+            break;
+          case 'thread':
+            groups = this._groupByThread(messages).map(t => ({ label: t.subject, messages: t.messages }));
+            break;
+          case 'email':
+            groups = messages.map(m => ({ label: m.subject || '(no subject)', messages: [m] }));
+            break;
+          default:
+            groups = [{ label: null, messages }];
+        }
+        for (const group of groups) {
+          const result = this.generatePdf(group.messages, projectId, group.label);
           const filePath = path.join(outputDir, result.filename);
           fs.writeFileSync(filePath, result.content);
           files.push({ ...result, path: filePath, relativePath: result.filename });
@@ -189,8 +206,8 @@ export class ExportService {
     }
 
     const manifest = this.generateHashManifest(files);
-    const manifestPath = path.join(outputDir, 'manifest.json');
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+    const manifestPath = path.join(outputDir, 'manifest.txt');
+    fs.writeFileSync(manifestPath, manifest.text, 'utf8');
 
     return { files, manifest, outputDir };
   }
@@ -516,6 +533,17 @@ export class ExportService {
     };
   }
 
+  static _groupByFolder(messages) {
+    const folders = new Map();
+    for (const msg of messages) {
+      const key = (msg.folder || msg.folderPath || 'INBOX').toLowerCase();
+      const label = msg.folder || msg.folderPath || 'INBOX';
+      if (!folders.has(key)) folders.set(key, { label, messages: [] });
+      folders.get(key).messages.push(msg);
+    }
+    return [...folders.values()];
+  }
+
   static _groupByThread(messages) {
     const normalize = (s) => (s || '').replace(/^(Re|Fwd|Fw)\s*:\s*/gi, '').trim().toLowerCase();
     const threads = new Map();
@@ -782,35 +810,65 @@ ${msgElements}
   }
 
   static generateHashManifest(exportedFiles) {
-    const manifest = {
-      generated: new Date().toISOString(),
+    const generated = new Date().toISOString();
+    const totalBytes = exportedFiles.reduce((sum, f) => sum + f.size, 0);
+    const sep = '='.repeat(64);
+    const thin = '-'.repeat(64);
+
+    let text = `${sep}\n`;
+    text += `SHERLOCKMAIL FORENSIC EXPORT MANIFEST\n`;
+    text += `${sep}\n`;
+    text += `Generated:       ${generated}\n`;
+    text += `Tool:            SherlockMail v0.9.0\n`;
+    text += `Hash Algorithm:  SHA-256\n`;
+    text += `File Count:      ${exportedFiles.length}\n`;
+    text += `Total Size:      ${totalBytes} bytes\n`;
+    text += `\n${sep}\n`;
+    text += `EXPORTED FILES\n`;
+    text += `${thin}\n\n`;
+
+    for (let i = 0; i < exportedFiles.length; i++) {
+      const f = exportedFiles[i];
+      const fname = f.filename || f.relativePath;
+      const ext = (fname || '').split('.').pop();
+      text += `[${i + 1}] ${fname}\n`;
+      text += `    Format:  ${ext}\n`;
+      text += `    Size:    ${f.size} bytes\n`;
+      text += `    SHA-256: ${f.hash}\n\n`;
+    }
+
+    const preHash = crypto.createHash('sha256').update(text).digest('hex');
+    text += `${sep}\n`;
+    text += `MANIFEST INTEGRITY\n`;
+    text += `${thin}\n`;
+    text += `Manifest SHA-256: ${preHash}\n`;
+    text += `${sep}\n`;
+
+    return {
+      generated,
       tool: 'SherlockMail v0.9.0',
       algorithm: 'SHA-256',
       fileCount: exportedFiles.length,
-      totalBytes: exportedFiles.reduce((sum, f) => sum + f.size, 0),
-      files: exportedFiles.map(f => ({
-        filename: f.filename || f.relativePath,
-        format: (f.filename || '').split('.').pop(),
-        size: f.size,
-        sha256: f.hash,
-      })),
-      manifestHash: null,
+      totalBytes,
+      manifestHash: preHash,
+      text,
     };
-
-    const preHash = JSON.stringify(manifest, null, 2);
-    manifest.manifestHash = crypto.createHash('sha256').update(preHash).digest('hex');
-
-    return manifest;
   }
 
   static verifyExport(exportDir) {
-    const manifestPath = path.join(exportDir, 'manifest.json');
+    const manifestPath = path.join(exportDir, 'manifest.txt');
     if (!fs.existsSync(manifestPath)) return { valid: false, error: 'Manifest not found' };
 
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    const results = [];
+    const text = fs.readFileSync(manifestPath, 'utf8');
+    const fileEntries = [];
+    const entryPattern = /^\[(\d+)\]\s+(.+)\n\s+Format:\s+\S+\n\s+Size:\s+\d+ bytes\n\s+SHA-256:\s+([a-f0-9]+)/gm;
+    let match;
+    while ((match = entryPattern.exec(text)) !== null) {
+      fileEntries.push({ filename: match[2], sha256: match[3] });
+    }
 
-    for (const fileEntry of manifest.files) {
+    const results = [];
+    for (const fileEntry of fileEntries) {
       const filePath = path.join(exportDir, fileEntry.filename);
       if (!fs.existsSync(filePath)) {
         results.push({ filename: fileEntry.filename, status: 'missing' });
