@@ -109,33 +109,41 @@ export class ExportService {
       outputDir = this.ensureExportDir(projectId, exportId);
     }
     const files = [];
+    let emailsFailed = 0;
+    let attachmentsFailed = 0;
 
     switch (format) {
       case 'eml':
         for (const msg of messages) {
-          const result = this.generateEml(msg);
-          const filePath = path.join(outputDir, result.filename);
-          fs.writeFileSync(filePath, result.content, 'utf8');
-          files.push({ ...result, path: filePath, relativePath: result.filename });
+          try {
+            const result = this.generateEml(msg);
+            const filePath = path.join(outputDir, result.filename);
+            fs.writeFileSync(filePath, result.content, 'utf8');
+            files.push({ ...result, path: filePath, relativePath: result.filename });
+          } catch { emailsFailed++; }
         }
         break;
 
       case 'mime':
         for (const msg of messages) {
-          const result = this.generateEml(msg);
-          result.filename = result.filename.replace('.eml', '.mime');
-          const filePath = path.join(outputDir, result.filename);
-          fs.writeFileSync(filePath, result.content, 'utf8');
-          files.push({ ...result, path: filePath, relativePath: result.filename });
+          try {
+            const result = this.generateEml(msg);
+            result.filename = result.filename.replace('.eml', '.mime');
+            const filePath = path.join(outputDir, result.filename);
+            fs.writeFileSync(filePath, result.content, 'utf8');
+            files.push({ ...result, path: filePath, relativePath: result.filename });
+          } catch { emailsFailed++; }
         }
         break;
 
       case 'msg':
         for (const msg of messages) {
-          const result = this.generateMsg(msg);
-          const filePath = path.join(outputDir, result.filename);
-          fs.writeFileSync(filePath, result.content);
-          files.push({ ...result, path: filePath, relativePath: result.filename });
+          try {
+            const result = this.generateMsg(msg);
+            const filePath = path.join(outputDir, result.filename);
+            fs.writeFileSync(filePath, result.content);
+            files.push({ ...result, path: filePath, relativePath: result.filename });
+          } catch { emailsFailed++; }
         }
         break;
 
@@ -175,10 +183,12 @@ export class ExportService {
             groups = [{ label: null, messages }];
         }
         for (const group of groups) {
-          const result = this.generatePdf(group.messages, projectId, group.label);
-          const filePath = path.join(outputDir, result.filename);
-          fs.writeFileSync(filePath, result.content);
-          files.push({ ...result, path: filePath, relativePath: result.filename });
+          try {
+            const result = this.generatePdf(group.messages, projectId, group.label);
+            const filePath = path.join(outputDir, result.filename);
+            fs.writeFileSync(filePath, result.content);
+            files.push({ ...result, path: filePath, relativePath: result.filename });
+          } catch { emailsFailed += group.messages.length; }
         }
         break;
       }
@@ -205,7 +215,7 @@ export class ExportService {
       }
     }
 
-    const manifest = this.generateHashManifest(files);
+    const manifest = this.generateHashManifest(files, messages, { emailsFailed, attachmentsFailed });
     const manifestPath = path.join(outputDir, 'manifest.txt');
     fs.writeFileSync(manifestPath, manifest.text, 'utf8');
 
@@ -809,9 +819,13 @@ ${msgElements}
     };
   }
 
-  static generateHashManifest(exportedFiles) {
+  static generateHashManifest(exportedFiles, messages = [], stats = {}) {
     const generated = new Date().toISOString();
     const totalBytes = exportedFiles.reduce((sum, f) => sum + f.size, 0);
+    const emailCount = messages.length;
+    const attachmentCount = messages.reduce((sum, m) => sum + (m.attachment_count || m.attachmentCount || 0), 0);
+    const emailsFailed = stats.emailsFailed || 0;
+    const attachmentsFailed = stats.attachmentsFailed || 0;
     const sep = '='.repeat(64);
     const thin = '-'.repeat(64);
 
@@ -823,6 +837,10 @@ ${msgElements}
     text += `Hash Algorithm:  SHA-256\n`;
     text += `File Count:      ${exportedFiles.length}\n`;
     text += `Total Size:      ${totalBytes} bytes\n`;
+    text += `Emails:          ${emailCount}\n`;
+    text += `Attachments:     ${attachmentCount}\n`;
+    text += `Emails Failed:   ${emailsFailed}\n`;
+    text += `Attach. Failed:  ${attachmentsFailed}\n`;
     text += `\n${sep}\n`;
     text += `EXPORTED FILES\n`;
     text += `${thin}\n\n`;
@@ -850,6 +868,10 @@ ${msgElements}
       algorithm: 'SHA-256',
       fileCount: exportedFiles.length,
       totalBytes,
+      emailCount,
+      attachmentCount,
+      emailsFailed,
+      attachmentsFailed,
       manifestHash: preHash,
       text,
     };
