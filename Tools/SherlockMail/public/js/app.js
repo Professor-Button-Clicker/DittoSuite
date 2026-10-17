@@ -2096,7 +2096,7 @@ function wizBuildPreview() {
   const driveLinks = document.getElementById('wiz-collect-drive').checked;
   const modernAtt = document.getElementById('wiz-collect-modern').checked;
   const differential = document.getElementById('wiz-differential')?.checked;
-  const outputDir = document.getElementById('wiz-output-dir').value || `./output/${currentProject?.id || 'unknown'}`;
+  const outputDir = document.getElementById('wiz-output-dir').value || `./data/exports/${currentProject?.id || 'unknown'}`;
 
   let totalMessages = 0;
   wizSelectedFolders.forEach(path => {
@@ -2219,7 +2219,7 @@ function wizShowResults(result) {
     ` : ''}
   `;
 
-  const srcDir = wizOutputDir || `./output/${currentProject?.id || ''}`;
+  const srcDir = wizOutputDir || `./data/exports/${currentProject?.id || ''}`;
   const transferSrc = document.getElementById('wiz-transfer-source');
   if (transferSrc) transferSrc.value = srcDir;
 
@@ -2234,7 +2234,7 @@ function wizShowResults(result) {
 }
 
 async function wizOpenOutputFolder() {
-  const folderPath = wizOutputDir || `./output/${currentProject?.id || ''}`;
+  const folderPath = wizOutputDir || `./data/exports/${currentProject?.id || ''}`;
   try {
     await api('/open-folder', { method: 'POST', body: { path: folderPath } });
   } catch (err) {

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, shell } from 'electron';
-import { dirname, join } from 'path';
+import { dirname, join, isAbsolute } from 'path';
 import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 import express from 'express';
 import apiRoutes from './src/api/routes.js';
 
@@ -28,7 +29,8 @@ function startServer() {
     expressApp.post('/api/open-folder', async (req, res) => {
       const folderPath = req.body.path;
       if (!folderPath) return res.status(400).json({ error: 'No path provided' });
-      const resolved = join(__dirname, folderPath);
+      const resolved = isAbsolute(folderPath) ? folderPath : join(__dirname, folderPath);
+      if (!existsSync(resolved)) return res.status(404).json({ error: 'Folder does not exist yet — run an export first' });
       const result = await shell.openPath(resolved);
       if (result) return res.status(500).json({ error: result });
       res.json({ ok: true });
