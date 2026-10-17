@@ -207,6 +207,7 @@ export class ImapHandler {
       icloud: { host: 'imap.mail.me.com', port: 993, tls: true, note: 'Requires App-Specific Password' },
       fastmail: { host: 'imap.fastmail.com', port: 993, tls: true },
       protonmail: { host: '127.0.0.1', port: 1143, tls: false, note: 'Requires ProtonMail Bridge' },
+      yandex: { host: 'imap.yandex.com', port: 993, tls: true },
       custom: { host: '', port: 993, tls: true },
     };
   }

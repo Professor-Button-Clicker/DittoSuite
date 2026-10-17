@@ -1593,13 +1593,16 @@ function wizBack() {
 const PROVIDER_MAP = {
   'gmail.com': 'gmail', 'googlemail.com': 'gmail',
   'outlook.com': 'microsoft', 'hotmail.com': 'microsoft', 'live.com': 'microsoft', 'msn.com': 'microsoft',
+  'outlook.co.uk': 'microsoft', 'hotmail.co.uk': 'microsoft', 'live.co.uk': 'microsoft',
   'zoho.com': 'zoho', 'zohomail.com': 'zoho', 'zohomail.eu': 'zoho', 'zohomail.in': 'zoho',
   'fastmail.com': 'fastmail', 'fastmail.fm': 'fastmail', 'messagingengine.com': 'fastmail',
   'yahoo.com': 'yahoo', 'ymail.com': 'yahoo', 'rocketmail.com': 'yahoo',
-  'aol.com': 'aol', 'aim.com': 'aol',
+  'yahoo.co.uk': 'yahoo', 'yahoo.co.jp': 'yahoo', 'yahoo.ca': 'yahoo',
+  'yahoo.com.au': 'yahoo', 'yahoo.fr': 'yahoo', 'yahoo.de': 'yahoo', 'yahoo.it': 'yahoo',
+  'aol.com': 'aol', 'aim.com': 'aol', 'verizon.net': 'aol',
   'icloud.com': 'icloud', 'me.com': 'icloud', 'mac.com': 'icloud',
-  'protonmail.com': 'protonmail', 'proton.me': 'protonmail', 'pm.me': 'protonmail',
-  'yandex.com': 'yandex', 'yandex.ru': 'yandex', 'ya.ru': 'yandex',
+  'protonmail.com': 'protonmail', 'proton.me': 'protonmail', 'pm.me': 'protonmail', 'protonmail.ch': 'protonmail',
+  'yandex.com': 'yandex', 'yandex.ru': 'yandex', 'yandex.ua': 'yandex', 'ya.ru': 'yandex',
 };
 
 const PROVIDER_PROTOCOLS = {

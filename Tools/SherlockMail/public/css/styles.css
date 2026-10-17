@@ -20,6 +20,7 @@
   --purple: #a78bfa;
   --purple-dim: rgba(167, 139, 250, 0.12);
   --navy: #1a2744;
+  --logo-envelope: #ffffff;
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.12);
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
@@ -55,6 +56,7 @@
   --purple: #7c5ec6;
   --purple-dim: rgba(124, 94, 198, 0.1);
   --navy: #1a2744;
+  --logo-envelope: #1a2744;
   --border: rgba(0, 0, 0, 0.08);
   --border-strong: rgba(0, 0, 0, 0.12);
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.06);

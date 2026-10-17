@@ -184,6 +184,10 @@ export class Pop3Handler {
       gmail: { host: 'pop.gmail.com', port: 995, useTls: true },
       outlook: { host: 'outlook.office365.com', port: 995, useTls: true },
       yahoo: { host: 'pop.mail.yahoo.com', port: 995, useTls: true },
+      aol: { host: 'pop.aol.com', port: 995, useTls: true },
+      zoho: { host: 'pop.zoho.com', port: 995, useTls: true },
+      fastmail: { host: 'pop.fastmail.com', port: 995, useTls: true },
+      yandex: { host: 'pop.yandex.com', port: 995, useTls: true },
       custom: { host: '', port: 995, useTls: true },
     };
   }
