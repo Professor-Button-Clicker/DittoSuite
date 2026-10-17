@@ -1803,6 +1803,20 @@ function wizUpdateAuthLabel() {
   else label.textContent = 'Password';
 }
 
+async function wizPickFolder() {
+  try {
+    const result = await api('/pick-folder', { method: 'POST' });
+    if (result.path) document.getElementById('wiz-output-dir').value = result.path;
+  } catch { /* user cancelled or not in Electron */ }
+}
+
+async function wizPickTransferDest() {
+  try {
+    const result = await api('/pick-folder', { method: 'POST' });
+    if (result.path) document.getElementById('wiz-transfer-dest').value = result.path;
+  } catch { /* user cancelled or not in Electron */ }
+}
+
 async function wizTestConnection() {
   wizSaveConnection();
   const el = document.getElementById('wiz-conn-status');
@@ -1947,7 +1961,7 @@ function wizBuildPreview() {
       <div class="wiz-preview-value" style="font-size:14px">${differential ? 'Differential (incremental)' : 'Full collection'}</div>
     </div>
     <div class="wiz-preview-card">
-      <div class="wiz-preview-title">Output Location</div>
+      <div class="wiz-preview-title">Destination Folder</div>
       <div class="wiz-preview-value" style="font-size:13px;font-family:var(--font-mono);word-break:break-all">${esc(outputDir)}</div>
     </div>
   `;
@@ -1982,12 +1996,31 @@ async function wizStartCollection() {
       <div class="wiz-stat"><span>Size</span><strong>${formatBytes(result.totalBytes)}</strong></div>
     `;
 
-    setTimeout(() => {
+    setTimeout(async () => {
       wizShowResults(result);
       wizGoToStep(7);
       loadMessages();
       loadFolders();
       loadSystemInfo();
+
+      const exportResults = await wizAutoExport();
+      if (exportResults && exportResults.length > 0) {
+        const exportEl = document.getElementById('wiz-results-errors');
+        const passed = exportResults.filter(r => r.success);
+        const failed = exportResults.filter(r => !r.success);
+        let html = `<div style="margin-top:16px;padding:16px;background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--radius)">
+          <h4 style="margin:0 0 12px 0">Auto-Export Results</h4>`;
+        if (passed.length) {
+          html += `<p style="color:var(--success);margin:0 0 8px">Exported ${passed.length} format(s): ${passed.map(r => r.format.toUpperCase()).join(', ')}</p>`;
+          const dest = wizOutputDir || `./data/exports/${currentProject?.id || ''}`;
+          html += `<p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Destination: <code style="color:var(--accent)">${esc(dest)}</code></p>`;
+        }
+        if (failed.length) {
+          html += `<p style="color:var(--danger);margin:0">Failed: ${failed.map(r => `${r.format.toUpperCase()} (${esc(r.error)})`).join(', ')}</p>`;
+        }
+        html += '</div>';
+        exportEl.innerHTML = html;
+      }
     }, 1500);
   } catch (err) {
     document.getElementById('wiz-progress-label').innerHTML =
@@ -2029,7 +2062,17 @@ async function wizRunQC() {
   try {
     const results = await api(`/projects/${currentProject.id}/qc`, { method: 'POST' });
     statusEl.innerHTML = '';
-    renderQCResults(results, 'wiz-qc-results');
+    const excludeFromCollectQC = ['Export Completeness', 'Audit Trail', 'DFIR Standards Compliance'];
+    const filtered = {
+      ...results,
+      checks: (results.checks || []).filter(c => !excludeFromCollectQC.includes(c.name)),
+    };
+    filtered.summary = {
+      passed: filtered.checks.filter(c => c.status === 'pass').length,
+      warnings: filtered.checks.filter(c => c.status === 'warning').length,
+      failed: filtered.checks.filter(c => c.status === 'fail').length,
+    };
+    renderQCResults(filtered, 'wiz-qc-results');
   } catch (err) {
     statusEl.innerHTML = `<span class="verify-fail">QC failed: ${esc(err.message || 'Unknown error')}</span>`;
   }
@@ -2037,24 +2080,48 @@ async function wizRunQC() {
 
 async function wizExport() {
   if (!currentProject) { toast('Select a project first'); return; }
-  const format = document.getElementById('wiz-export-format').value;
+  const format = document.getElementById('wiz-export-format')?.value;
+  if (!format) return;
   const statusEl = document.getElementById('wiz-export-status');
-  statusEl.innerHTML = '<span style="color:var(--accent)">Exporting...</span>';
+  if (statusEl) statusEl.innerHTML = '<span style="color:var(--accent)">Exporting...</span>';
+  const outputDir = wizOutputDir || '';
 
   try {
-    const result = await api(`/projects/${currentProject.id}/export`, { method: 'POST', body: { format } });
-    statusEl.innerHTML = '<span class="verify-pass">Export complete</span>';
+    const body = { format };
+    if (outputDir) body.outputDir = outputDir;
+    const result = await api(`/projects/${currentProject.id}/export`, { method: 'POST', body });
+    if (statusEl) statusEl.innerHTML = '<span class="verify-pass">Export complete</span>';
     const el = document.getElementById('wiz-export-result');
-    el.innerHTML = `
+    if (el) el.innerHTML = `
       <div class="stats-grid">
         <div class="stat-card"><div class="stat-label">Format</div><div class="stat-value" style="font-size:18px">${result.format?.toUpperCase()}</div></div>
         <div class="stat-card"><div class="stat-label">Files</div><div class="stat-value">${result.files?.length || 0}</div></div>
         <div class="stat-card"><div class="stat-label">Size</div><div class="stat-value" style="font-size:18px">${formatBytes(result.totalBytes)}</div></div>
       </div>`;
     loadSystemInfo();
+    return result;
   } catch (err) {
-    statusEl.innerHTML = `<span class="verify-fail">Export failed: ${esc(err.message)}</span>`;
+    if (statusEl) statusEl.innerHTML = `<span class="verify-fail">Export failed: ${esc(err.message)}</span>`;
+    return null;
   }
+}
+
+async function wizAutoExport() {
+  const formats = Array.from(document.querySelectorAll('input[name="wiz-format"]:checked')).map(cb => cb.value);
+  if (formats.length === 0 || !currentProject) return;
+  const outputDir = wizOutputDir || '';
+  const results = [];
+  for (const format of formats) {
+    try {
+      const body = { format };
+      if (outputDir) body.outputDir = outputDir;
+      const result = await api(`/projects/${currentProject.id}/export`, { method: 'POST', body });
+      results.push({ format, success: true, files: result.files?.length || 0, totalBytes: result.totalBytes || 0 });
+    } catch (err) {
+      results.push({ format, success: false, error: err.message });
+    }
+  }
+  return results;
 }
 
 async function wizTransfer() {

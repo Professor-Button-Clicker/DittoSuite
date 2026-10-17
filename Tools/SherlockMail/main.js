@@ -14,6 +14,17 @@ function startServer() {
     const expressApp = express();
     expressApp.use(express.json({ limit: '50mb' }));
     expressApp.use(express.static(join(__dirname, 'public')));
+
+    expressApp.post('/api/pick-folder', async (req, res) => {
+      if (!mainWindow) return res.status(500).json({ error: 'No window available' });
+      const result = await dialog.showOpenDialog(mainWindow, {
+        properties: ['openDirectory'],
+        title: 'Select Destination Folder',
+      });
+      if (result.canceled) return res.json({ canceled: true });
+      res.json({ path: result.filePaths[0] });
+    });
+
     expressApp.use('/api', apiRoutes);
     expressApp.get('*', (req, res) => {
       res.sendFile(join(__dirname, 'public', 'index.html'));

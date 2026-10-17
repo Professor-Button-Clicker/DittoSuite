@@ -248,7 +248,7 @@
             <div class="wizard-step-line"></div>
             <div class="wizard-step" data-step="8"><span class="step-num">8</span><span class="step-label">QC Verify</span></div>
             <div class="wizard-step-line"></div>
-            <div class="wizard-step" data-step="9"><span class="step-num">9</span><span class="step-label">Transfer</span></div>
+            <div class="wizard-step" data-step="9"><span class="step-num">9</span><span class="step-label">Transfer <span style="font-size:9px;opacity:0.6">(optional)</span></span></div>
           </div>
 
           <div class="wizard-body">
@@ -534,11 +534,17 @@
                 </div>
 
                 <div class="wiz-section">
-                  <h3 class="wiz-section-title">Output Location</h3>
+                  <h3 class="wiz-section-title">Destination Folder</h3>
                   <div class="form-group">
                     <label>Save Collection To</label>
-                    <input type="text" id="wiz-output-dir" placeholder="Leave blank for default (./output/<project-id>)">
-                    <span class="form-hint">Absolute path to the directory where collected data will be stored</span>
+                    <div style="display:flex;gap:8px;align-items:center">
+                      <input type="text" id="wiz-output-dir" placeholder="Leave blank for default (./output/<project-id>)" style="flex:1">
+                      <button class="btn btn-secondary" onclick="wizPickFolder()" style="white-space:nowrap;padding:8px 16px" title="Browse for folder">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;vertical-align:middle;margin-right:4px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                        Browse
+                      </button>
+                    </div>
+                    <span class="form-hint">Absolute path to the destination folder where collected data and exports will be stored</span>
                   </div>
                 </div>
               </div>
@@ -549,6 +555,27 @@
               <h2>Step 3: Query Builder</h2>
               <p class="wizard-desc">Optionally filter which emails to collect. Leave empty to collect all mail from selected folders.</p>
               <div class="wizard-form">
+                <div class="wiz-section" style="margin-bottom:16px">
+                  <h3 class="wiz-section-title">Search Type</h3>
+                  <div style="display:flex;gap:12px">
+                    <label class="wiz-toggle-card" style="flex:1">
+                      <input type="radio" name="wiz-query-type" value="in-place" checked>
+                      <div class="toggle-card-body">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:20px;height:20px"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <span>In-Place Query</span>
+                        <span class="toggle-hint">Filter on the server before collection &mdash; only matching emails are downloaded</span>
+                      </div>
+                    </label>
+                    <label class="wiz-toggle-card" style="flex:1">
+                      <input type="radio" name="wiz-query-type" value="in-line">
+                      <div class="toggle-card-body">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:20px;height:20px"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+                        <span>In-Line Query</span>
+                        <span class="toggle-hint">Collect all emails first, then search within collected messages</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
                 <div class="wiz-section">
                   <div class="wiz-optional-badge">Optional</div>
                   <div class="form-row">
@@ -642,7 +669,7 @@
             <!-- Step 8: QC Verify -->
             <div class="wizard-content" id="wiz-step-8">
               <h2>Step 8: QC Verification</h2>
-              <p class="wizard-desc">Run comprehensive quality control checks on the collected data.</p>
+              <p class="wizard-desc">Run quality control checks on the collected data (collection-focused checks only).</p>
               <div class="wizard-form">
                 <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px">
                   <button class="btn btn-primary" onclick="wizRunQC()">Run QC Checks</button>
@@ -654,27 +681,11 @@
 
             <!-- Step 9: Transfer -->
             <div class="wizard-content" id="wiz-step-9">
-              <h2>Step 9: Export &amp; Transfer</h2>
-              <p class="wizard-desc">Export collected data to your chosen format and transfer to an external location.</p>
+              <h2>Step 9: Transfer</h2>
+              <p class="wizard-desc">Optionally transfer the collected data and exports to an external location.</p>
               <div class="wizard-form">
                 <div class="wiz-section">
-                  <h3 class="wiz-section-title">Quick Export</h3>
-                  <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px">
-                    <select id="wiz-export-format">
-                      <option value="eml">EML</option>
-                      <option value="mbox">MBOX</option>
-                      <option value="msg">MSG</option>
-                      <option value="pst">PST</option>
-                      <option value="mime">MIME</option>
-                      <option value="pdf">PDF Report</option>
-                      <option value="concordance">Concordance DAT</option>
-                    </select>
-                    <button class="btn btn-primary" onclick="wizExport()">Export Now</button>
-                    <span id="wiz-export-status"></span>
-                  </div>
-                  <div id="wiz-export-result"></div>
-                </div>
-                <div class="wiz-section">
+                  <div class="wiz-optional-badge">Optional</div>
                   <h3 class="wiz-section-title">Transfer Collection</h3>
                   <div class="form-group">
                     <label>Source Directory</label>
@@ -682,7 +693,13 @@
                   </div>
                   <div class="form-group">
                     <label>Destination Directory</label>
-                    <input type="text" id="wiz-transfer-dest" placeholder="e.g. \\\\server\\share\\case-001 or D:\\Evidence\\case-001">
+                    <div style="display:flex;gap:8px;align-items:center">
+                      <input type="text" id="wiz-transfer-dest" placeholder="e.g. \\\\server\\share\\case-001 or D:\\Evidence\\case-001" style="flex:1">
+                      <button class="btn btn-secondary" onclick="wizPickTransferDest()" style="white-space:nowrap;padding:8px 16px" title="Browse for folder">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px;vertical-align:middle;margin-right:4px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                        Browse
+                      </button>
+                    </div>
                     <span class="form-hint">Enter the full path to the destination folder.</span>
                   </div>
                   <div style="display:flex;gap:12px;align-items:center">
@@ -964,8 +981,8 @@
                 <li><strong>Preview</strong> &mdash; Review settings and estimated item count</li>
                 <li><strong>Collecting</strong> &mdash; Live progress with per-message hashing</li>
                 <li><strong>Results</strong> &mdash; View stats, errors, and collection log</li>
-                <li><strong>QC Verify</strong> &mdash; Run 11-point quality control checks</li>
-                <li><strong>Export &amp; Transfer</strong> &mdash; Export and copy to external storage</li>
+                <li><strong>QC Verify</strong> &mdash; Run collection-focused quality control checks</li>
+                <li><strong>Transfer</strong> &mdash; Optionally copy collected data to external storage</li>
               </ol>
             </section>
 

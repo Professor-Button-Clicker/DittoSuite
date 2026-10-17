@@ -1424,7 +1424,7 @@ router.post('/projects/:id/export', (req, res) => {
   const project = getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  const { format } = req.body;
+  const { format, outputDir: customOutputDir } = req.body;
   const messages = getAllProjectMessages(project.id);
   const folders = getFolders(project.id);
 
@@ -1434,7 +1434,7 @@ router.post('/projects/:id/export', (req, res) => {
 
   try {
     const exportId = crypto.randomUUID();
-    const { files, manifest, outputDir } = ExportService.exportToFiles(project.id, exportId, format, messages, folders);
+    const { files, manifest, outputDir } = ExportService.exportToFiles(project.id, exportId, format, messages, folders, customOutputDir);
 
     const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
 

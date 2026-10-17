@@ -100,8 +100,14 @@ export class ExportService {
     return dir;
   }
 
-  static exportToFiles(projectId, exportId, format, messages, folders) {
-    const outputDir = this.ensureExportDir(projectId, exportId);
+  static exportToFiles(projectId, exportId, format, messages, folders, customOutputDir) {
+    let outputDir;
+    if (customOutputDir) {
+      outputDir = path.join(customOutputDir, format);
+      fs.mkdirSync(outputDir, { recursive: true });
+    } else {
+      outputDir = this.ensureExportDir(projectId, exportId);
+    }
     const files = [];
 
     switch (format) {
