@@ -85,6 +85,41 @@ export function getProjects() {
   return getDb().prepare('SELECT * FROM projects ORDER BY created_at DESC').all();
 }
 
+export function getProjectsSummary() {
+  const d = getDb();
+  return d.prepare(`
+    SELECT p.*,
+      COALESCE(m.msg_count, 0) AS message_count,
+      COALESCE(m.total_size, 0) AS total_size,
+      COALESCE(m.attachment_total, 0) AS attachment_count,
+      COALESCE(a.acq_count, 0) AS acquisition_count,
+      a.last_collected,
+      COALESCE(e.export_count, 0) AS export_count,
+      e.last_exported
+    FROM projects p
+    LEFT JOIN (
+      SELECT project_id,
+        COUNT(*) AS msg_count,
+        SUM(size) AS total_size,
+        SUM(COALESCE(attachment_count, 0)) AS attachment_total
+      FROM messages GROUP BY project_id
+    ) m ON m.project_id = p.id
+    LEFT JOIN (
+      SELECT project_id,
+        COUNT(*) AS acq_count,
+        MAX(completed_at) AS last_collected
+      FROM acquisitions GROUP BY project_id
+    ) a ON a.project_id = p.id
+    LEFT JOIN (
+      SELECT project_id,
+        COUNT(*) AS export_count,
+        MAX(completed_at) AS last_exported
+      FROM export_records GROUP BY project_id
+    ) e ON e.project_id = p.id
+    ORDER BY p.updated_at DESC
+  `).all();
+}
+
 export function getProject(id) {
   return getDb().prepare('SELECT * FROM projects WHERE id = ?').get(id);
 }
@@ -92,6 +127,38 @@ export function getProject(id) {
 export function updateProjectStatus(id, status) {
   const now = new Date().toISOString();
   getDb().prepare('UPDATE projects SET status = ?, updated_at = ? WHERE id = ?').run(status, now, id);
+}
+
+export function updateProject(id, fields, examiner) {
+  const d = getDb();
+  const project = d.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+  if (!project) throw new Error('Project not found');
+  const acq = d.prepare('SELECT COUNT(*) as count FROM acquisitions WHERE project_id = ? AND status = ?').get(id, 'completed');
+  const postCollection = acq.count > 0;
+
+  const allowed = ['name', 'target_email', 'provider_type', 'case_name', 'case_id', 'examiner_name', 'agency', 'legal_authority', 'legal_scope'];
+  const changes = {};
+  const sets = [];
+  for (const key of allowed) {
+    if (key in fields && fields[key] !== project[key]) {
+      changes[key] = { from: project[key], to: fields[key] };
+      sets.push(`${key} = ?`);
+    }
+  }
+  if (sets.length === 0) return project;
+
+  const now = new Date().toISOString();
+  sets.push('updated_at = ?');
+  const values = Object.keys(changes).map(k => fields[k]);
+  values.push(now, id);
+  d.prepare(`UPDATE projects SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+
+  const eventType = postCollection ? 'PROJECT_EDITED_POST_COLLECTION' : 'PROJECT_EDITED';
+  const desc = postCollection
+    ? `Project details modified AFTER collection completed — chain of custody impact`
+    : `Project details modified`;
+  addAuditEntry(id, eventType, desc, { changes, postCollection }, examiner || null);
+  return d.prepare('SELECT * FROM projects WHERE id = ?').get(id);
 }
 
 export function deleteProject(id) {

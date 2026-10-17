@@ -75,13 +75,14 @@ function switchTab(tab) {
 
   // Handle message-list-panel (always-present flex container) vs panel-view overlays
   const msgPanel = document.getElementById('view-messages');
-  const panelViews = ['new-project', 'search', 'audit', 'collect', 'export', 'forensics', 'guide'];
+  const panelViews = ['new-project', 'project-detail', 'search', 'tracker', 'audit', 'collect', 'export', 'forensics', 'guide'];
 
   if (panelViews.includes(tab)) {
     const target = document.getElementById(`view-${tab}`);
     if (target) target.classList.add('visible');
   }
 
+  if (tab === 'tracker') loadProjectsTracker();
   if (tab === 'audit' && currentProject) loadAuditLog();
   if (tab === 'search') document.getElementById('adv-search-input')?.focus();
   if (tab === 'collect' && !currentProject) toast('Select a project first to begin collection');
@@ -151,17 +152,138 @@ async function loadProjects() {
   } catch {}
 }
 
+async function loadProjectsTracker() {
+  const container = document.getElementById('tracker-content');
+  try {
+    const projects = await api('/projects-summary');
+    if (projects.length === 0) {
+      container.innerHTML = '<p style="color:var(--text-muted)">No projects yet. Create a project to get started.</p>';
+      return;
+    }
+    const statusClass = s => ({ created: 'status-created', collecting: 'status-collecting', completed: 'status-completed', exported: 'status-exported', error: 'status-error' }[s] || '');
+    container.innerHTML = `
+      <div style="overflow-x:auto">
+        <table class="tracker-table">
+          <thead>
+            <tr>
+              <th>Project</th>
+              <th>Target Email</th>
+              <th>Status</th>
+              <th>Messages</th>
+              <th>Attachments</th>
+              <th>Size</th>
+              <th>Collections</th>
+              <th>Exports</th>
+              <th>Last Collected</th>
+              <th>Last Exported</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${projects.map(p => `
+              <tr class="tracker-row" onclick="selectProject('${p.id}')" style="cursor:pointer">
+                <td><strong>${esc(p.name)}</strong>${p.case_id ? `<br><span style="font-size:11px;color:var(--text-muted)">Case: ${esc(p.case_id)}</span>` : ''}</td>
+                <td>${esc(p.target_email)}</td>
+                <td><span class="project-status ${statusClass(p.status)}">${p.status.toUpperCase()}</span></td>
+                <td style="text-align:right">${(p.message_count || 0).toLocaleString()}</td>
+                <td style="text-align:right">${(p.attachment_count || 0).toLocaleString()}</td>
+                <td style="text-align:right">${formatBytes(p.total_size || 0)}</td>
+                <td style="text-align:center">${p.acquisition_count || 0}</td>
+                <td style="text-align:center">${p.export_count || 0}</td>
+                <td>${p.last_collected ? new Date(p.last_collected).toLocaleDateString() : '—'}</td>
+                <td>${p.last_exported ? new Date(p.last_exported).toLocaleDateString() : '—'}</td>
+                <td>${new Date(p.created_at).toLocaleDateString()}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+          <tfoot>
+            <tr style="font-weight:600;border-top:2px solid var(--border)">
+              <td>Total: ${projects.length} project${projects.length !== 1 ? 's' : ''}</td>
+              <td></td>
+              <td></td>
+              <td style="text-align:right">${projects.reduce((s, p) => s + (p.message_count || 0), 0).toLocaleString()}</td>
+              <td style="text-align:right">${projects.reduce((s, p) => s + (p.attachment_count || 0), 0).toLocaleString()}</td>
+              <td style="text-align:right">${formatBytes(projects.reduce((s, p) => s + (p.total_size || 0), 0))}</td>
+              <td style="text-align:center">${projects.reduce((s, p) => s + (p.acquisition_count || 0), 0)}</td>
+              <td style="text-align:center">${projects.reduce((s, p) => s + (p.export_count || 0), 0)}</td>
+              <td></td>
+              <td></td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>`;
+  } catch (err) {
+    container.innerHTML = `<p style="color:var(--danger)">Failed to load projects: ${esc(err.message)}</p>`;
+  }
+}
+
 async function selectProject(id) {
   currentProject = await api(`/projects/${id}`);
   currentFolder = null;
   loadProjects();
+  loadSystemInfo();
+  showProjectDetail();
+}
 
+function showProjectDetail() {
+  if (!currentProject) return;
+  const p = currentProject;
+  const config = typeof p.config === 'string' ? JSON.parse(p.config || '{}') : (p.config || {});
+  document.getElementById('project-detail-title').textContent = p.name;
+  document.getElementById('det-name').value = p.name || '';
+  document.getElementById('det-email').value = p.target_email || '';
+  document.getElementById('det-provider').value = p.provider_type || 'imap';
+  document.getElementById('det-status').value = p.status || '';
+  document.getElementById('det-case-id').value = p.case_id || '';
+  document.getElementById('det-case-name').value = p.case_name || '';
+  document.getElementById('det-examiner').value = p.examiner_name || '';
+  document.getElementById('det-agency').value = p.agency || '';
+  document.getElementById('det-legal-authority').value = p.legal_authority || '';
+  document.getElementById('det-legal-scope').value = p.legal_scope || '';
+
+  const hasCollected = ['completed', 'exported'].includes(p.status);
+  const locked = document.getElementById('project-edit-locked');
+  locked.style.display = hasCollected ? '' : 'none';
+
+  switchTab('project-detail');
+  document.getElementById('message-list-title').textContent = p.name;
+}
+
+async function saveProjectDetails(e) {
+  e.preventDefault();
+  if (!currentProject) return;
+  try {
+    const updated = await api(`/projects/${currentProject.id}`, {
+      method: 'PUT',
+      body: {
+        name: document.getElementById('det-name').value,
+        target_email: document.getElementById('det-email').value,
+        provider_type: document.getElementById('det-provider').value,
+        case_id: document.getElementById('det-case-id').value,
+        case_name: document.getElementById('det-case-name').value,
+        examiner_name: document.getElementById('det-examiner').value,
+        agency: document.getElementById('det-agency').value,
+        legal_authority: document.getElementById('det-legal-authority').value,
+        legal_scope: document.getElementById('det-legal-scope').value,
+      }
+    });
+    currentProject = updated;
+    toast('Project updated');
+    loadProjects();
+    document.getElementById('project-detail-title').textContent = updated.name;
+    document.getElementById('message-list-title').textContent = updated.name;
+  } catch (err) {
+    toast('Update failed: ' + err.message);
+  }
+}
+
+function openProjectReview() {
+  if (!currentProject) return;
   switchTab('messages');
   loadFolders();
   loadMessages();
-
   document.getElementById('message-list-title').textContent = currentProject.name;
-  loadSystemInfo();
 }
 
 async function deleteProject(id) {

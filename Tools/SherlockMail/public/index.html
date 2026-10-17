@@ -25,7 +25,8 @@
 
       <div class="nav-tabs">
         <div class="nav-tab active" data-tab="projects" onclick="switchTab('projects')">Projects</div>
-        <div class="nav-tab" data-tab="audit" onclick="switchTab('audit')">Tracker</div>
+        <div class="nav-tab" data-tab="tracker" onclick="switchTab('tracker')">Tracker</div>
+        <div class="nav-tab" data-tab="audit" onclick="switchTab('audit')">Chain of Custody</div>
         <div class="nav-tab" data-tab="collect" onclick="switchTab('collect')">Collect</div>
         <div class="nav-tab" data-tab="forensics" onclick="switchTab('forensics')">QC</div>
         <div class="nav-tab" data-tab="export" onclick="switchTab('export')">Export</div>
@@ -156,6 +157,77 @@
           </form>
         </div>
 
+        <!-- Project Detail Panel -->
+        <div id="view-project-detail" class="panel-view">
+          <h2 id="project-detail-title">Project Details</h2>
+          <div id="project-edit-locked" style="display:none;margin-bottom:16px;padding:10px 14px;border-radius:8px;background:var(--bg-surface);border:1px solid var(--warning);color:var(--warning);font-size:13px">
+            Warning: This project has completed collections. Any changes will be recorded in the Chain of Custody log as a post-collection modification.
+          </div>
+          <form id="project-detail-form" onsubmit="saveProjectDetails(event)">
+            <div class="form-group">
+              <label>Project Name</label>
+              <input type="text" id="det-name" required placeholder="Project name">
+            </div>
+            <div class="form-group">
+              <label>Target Email Address</label>
+              <input type="email" id="det-email" required placeholder="target@example.com">
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:500px">
+              <div class="form-group">
+                <label>Provider Type</label>
+                <select id="det-provider">
+                  <option value="imap">IMAP</option>
+                  <option value="gmail_api">Gmail API</option>
+                  <option value="graph">Microsoft Graph API</option>
+                  <option value="zoho_api">Zoho Mail API</option>
+                  <option value="jmap">JMAP (Fastmail)</option>
+                  <option value="ews">Exchange Web Services (EWS)</option>
+                  <option value="pop3">POP3</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Status</label>
+                <input type="text" id="det-status" disabled style="text-transform:uppercase;font-weight:600">
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:500px">
+              <div class="form-group">
+                <label>Case / Matter ID</label>
+                <input type="text" id="det-case-id" placeholder="C1231234">
+              </div>
+              <div class="form-group">
+                <label>Case Name</label>
+                <input type="text" id="det-case-name" placeholder="Case name">
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:500px">
+              <div class="form-group">
+                <label>Examiner Name</label>
+                <input type="text" id="det-examiner" placeholder="Examiner name">
+              </div>
+              <div class="form-group">
+                <label>Agency / Organization</label>
+                <input type="text" id="det-agency" placeholder="Agency">
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:500px">
+              <div class="form-group">
+                <label>Legal Authority</label>
+                <input type="text" id="det-legal-authority" placeholder="e.g. Subpoena, Court Order">
+              </div>
+              <div class="form-group">
+                <label>Legal Scope</label>
+                <input type="text" id="det-legal-scope" placeholder="Scope of collection">
+              </div>
+            </div>
+            <div id="project-detail-actions" style="margin-top:24px;display:flex;gap:12px">
+              <button type="submit" class="btn btn-primary" id="det-save-btn">Save Changes</button>
+              <button type="button" class="btn btn-secondary" onclick="switchTab('projects')">Back to Projects</button>
+              <button type="button" class="btn btn-secondary" onclick="openProjectReview()" style="margin-left:auto">Open in Review</button>
+            </div>
+          </form>
+        </div>
+
         <!-- Search Panel -->
         <div id="view-search" class="panel-view">
           <h2>Forensic Search</h2>
@@ -217,6 +289,15 @@
             </p>
           </div>
           <div id="search-results"></div>
+        </div>
+
+        <!-- Projects Tracker Panel -->
+        <div id="view-tracker" class="panel-view">
+          <h2>Projects Tracker</h2>
+          <p style="color:var(--text-muted);margin-bottom:16px">Overview of all forensic email collection projects on this machine.</p>
+          <div id="tracker-content">
+            <p style="color:var(--text-muted)">Loading projects...</p>
+          </div>
         </div>
 
         <!-- Audit Log Panel -->

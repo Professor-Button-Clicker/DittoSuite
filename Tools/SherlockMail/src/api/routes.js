@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
-  createProject, getProjects, getProject, deleteProject, updateProjectStatus,
+  createProject, getProjects, getProjectsSummary, getProject, deleteProject, updateProjectStatus, updateProject,
   saveFolders, getFolders, createAcquisition, saveMessage, getMessages, getMessageCount,
   saveSearchQuery, getSearchQueries, saveExportRecord, getExportRecords, updateExportRecord,
   getAuditLog, getFullAuditLog, getStats, addAuditEntry,
@@ -233,6 +233,10 @@ router.get('/projects', (req, res) => {
   res.json(getProjects());
 });
 
+router.get('/projects-summary', (req, res) => {
+  res.json(getProjectsSummary());
+});
+
 router.get('/projects/:id', (req, res) => {
   const project = getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -245,6 +249,16 @@ router.post('/projects', (req, res) => {
     res.status(201).json(project);
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+router.put('/projects/:id', (req, res) => {
+  try {
+    const updated = updateProject(req.params.id, req.body, req.body.examiner);
+    res.json(updated);
+  } catch (err) {
+    const status = err.message.includes('Cannot edit') ? 403 : 400;
+    res.status(status).json({ error: err.message });
   }
 });
 
