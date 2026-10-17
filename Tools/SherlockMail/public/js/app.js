@@ -2016,7 +2016,10 @@ async function wizStartCollection() {
         if (passed.length) {
           html += `<p style="color:var(--success);margin:0 0 8px">Exported ${passed.length} format(s): ${passed.map(r => r.format.toUpperCase()).join(', ')}</p>`;
           const dest = wizOutputDir || `./data/exports/${currentProject?.id || ''}`;
-          html += `<p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Destination: <code style="color:var(--accent)">${esc(dest)}</code></p>`;
+          html += `<div style="display:flex;align-items:center;gap:10px;margin:0 0 8px">
+            <p style="font-size:12px;color:var(--text-muted);margin:0">Destination: <code style="color:var(--accent)">${esc(dest)}</code></p>
+            <button class="btn btn-secondary" onclick="wizOpenOutputFolder()" style="padding:4px 10px;font-size:12px;white-space:nowrap">Open Folder</button>
+          </div>`;
         }
         if (failed.length) {
           html += `<p style="color:var(--danger);margin:0">Failed: ${failed.map(r => `${r.format.toUpperCase()} (${esc(r.error)})`).join(', ')}</p>`;
@@ -2054,7 +2057,22 @@ function wizShowResults(result) {
   if (transferSrc) transferSrc.value = srcDir;
 
   const errEl = document.getElementById('wiz-results-errors');
-  errEl.innerHTML = '<p style="color:var(--success);font-weight:600">Collection completed successfully.</p>';
+  errEl.innerHTML = `<div style="display:flex;align-items:center;gap:12px">
+    <p style="color:var(--success);font-weight:600;margin:0">Collection completed successfully.</p>
+    <button class="btn btn-secondary" onclick="wizOpenOutputFolder()" style="white-space:nowrap;padding:6px 14px;font-size:13px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:middle;margin-right:4px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      Open Folder
+    </button>
+  </div>`;
+}
+
+async function wizOpenOutputFolder() {
+  const folderPath = wizOutputDir || `./output/${currentProject?.id || ''}`;
+  try {
+    await api('/open-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: folderPath }) });
+  } catch (err) {
+    toast('Could not open folder: ' + err.message);
+  }
 }
 
 async function wizRunQC() {

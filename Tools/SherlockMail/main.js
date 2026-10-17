@@ -25,6 +25,15 @@ function startServer() {
       res.json({ path: result.filePaths[0] });
     });
 
+    expressApp.post('/api/open-folder', async (req, res) => {
+      const folderPath = req.body.path;
+      if (!folderPath) return res.status(400).json({ error: 'No path provided' });
+      const resolved = join(__dirname, folderPath);
+      const result = await shell.openPath(resolved);
+      if (result) return res.status(500).json({ error: result });
+      res.json({ ok: true });
+    });
+
     expressApp.use('/api', apiRoutes);
     expressApp.get('*', (req, res) => {
       res.sendFile(join(__dirname, 'public', 'index.html'));
