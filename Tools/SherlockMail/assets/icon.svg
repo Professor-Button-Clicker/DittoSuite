@@ -5,6 +5,5 @@
     <path d="M10 30 L80 80 L150 30" fill="none" stroke="#1a2744" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
     <circle cx="160" cy="110" r="36" fill="none" stroke="#d4881c" stroke-width="10"/>
     <line x1="186" y1="136" x2="206" y2="156" stroke="#d4881c" stroke-width="10" stroke-linecap="round"/>
-    <text x="160" y="120" text-anchor="middle" font-family="Arial, sans-serif" font-weight="700" font-size="40" fill="#1a2744">@</text>
   </g>
 </svg>

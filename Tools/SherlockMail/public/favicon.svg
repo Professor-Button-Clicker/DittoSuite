@@ -7,7 +7,5 @@
     <!-- Magnifying glass -->
     <circle cx="320" cy="200" r="72" fill="none" stroke="#d4881c" stroke-width="18"/>
     <line x1="370" y1="252" x2="410" y2="292" stroke="#d4881c" stroke-width="18" stroke-linecap="round"/>
-    <!-- @ symbol -->
-    <text x="320" y="218" text-anchor="middle" font-family="Arial, sans-serif" font-weight="700" font-size="80" fill="#1a2744">@</text>
   </g>
 </svg>
