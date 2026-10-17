@@ -134,7 +134,7 @@ export class ExportService {
         for (const msg of messages) {
           const result = this.generateMsg(msg);
           const filePath = path.join(outputDir, result.filename);
-          fs.writeFileSync(filePath, result.content, 'utf8');
+          fs.writeFileSync(filePath, result.content);
           files.push({ ...result, path: filePath, relativePath: result.filename });
         }
         break;
@@ -156,10 +156,13 @@ export class ExportService {
       }
 
       case 'pdf': {
-        const result = this.generatePdf(messages, projectId);
-        const filePath = path.join(outputDir, result.filename);
-        fs.writeFileSync(filePath, result.content);
-        files.push({ ...result, path: filePath, relativePath: result.filename });
+        const threads = this._groupByThread(messages);
+        for (const thread of threads) {
+          const result = this.generatePdf(thread.messages, projectId, thread.subject);
+          const filePath = path.join(outputDir, result.filename);
+          fs.writeFileSync(filePath, result.content);
+          files.push({ ...result, path: filePath, relativePath: result.filename });
+        }
         break;
       }
 
@@ -257,40 +260,170 @@ export class ExportService {
   static generateMsg(message) {
     const from = message.from_address || message.fromAddress || '';
     const to = parseJsonField(message.to_addresses || message.toAddresses, []);
+    const cc = parseJsonField(message.cc_addresses || message.ccAddresses, []);
     const subject = message.subject || '(no subject)';
-
-    const properties = {
-      '0037': { name: 'PidTagSubjectW', type: 'PT_UNICODE', value: subject },
-      '0042': { name: 'PidTagSentRepresentingName', type: 'PT_UNICODE', value: from },
-      '0E04': { name: 'PidTagDisplayTo', type: 'PT_UNICODE', value: Array.isArray(to) ? to.join('; ') : to },
-      '0E06': { name: 'PidTagMessageDeliveryTime', type: 'PT_SYSTIME', value: message.date },
-      '0E07': { name: 'PidTagMessageFlags', type: 'PT_LONG', value: 1 },
-      '0E08': { name: 'PidTagMessageSize', type: 'PT_LONG', value: message.size || 0 },
-      '1000': { name: 'PidTagBody', type: 'PT_UNICODE', value: message.body_text || message.bodyText || '' },
-      '1009': { name: 'PidTagRtfCompressed', type: 'PT_BINARY', value: '[compressed RTF]' },
-      '1035': { name: 'PidTagInternetMessageId', type: 'PT_UNICODE', value: message.message_id || message.messageId || '' },
-    };
-
-    const content = JSON.stringify({
-      format: 'MSG (OLE/CFB Structured Storage)',
-      version: '2.0',
-      properties,
-      attachmentCount: message.attachment_count || message.attachmentCount || 0,
-      hashes: {
-        md5: message.hash_md5 || message.hashMd5,
-        sha256: message.hash_sha256 || message.hashSha256,
-        sha512: message.hash_sha512 || message.hashSha512,
-      },
-    }, null, 2);
-
+    const bodyText = (message.body_text || message.bodyText || '').substring(0, 250000);
+    const msgIdVal = message.message_id || message.messageId || '';
     const sha256 = message.hash_sha256 || message.hashSha256 || '';
+    const toStr = Array.isArray(to) ? to.join('; ') : to;
+    const ccStr = Array.isArray(cc) ? cc.join('; ') : cc;
 
+    const subjectBuf = Buffer.from(subject + '\0', 'utf16le');
+    const fromBuf = Buffer.from(from + '\0', 'utf16le');
+    const toBuf = Buffer.from(toStr + '\0', 'utf16le');
+    const bodyBuf = Buffer.from(bodyText + '\0', 'utf16le');
+    const msgIdBuf = Buffer.from(msgIdVal + '\0', 'utf16le');
+    const msgClassBuf = Buffer.from('IPM.Note\0', 'utf16le');
+    const ccBuf = ccStr ? Buffer.from(ccStr + '\0', 'utf16le') : null;
+
+    const varProps = [
+      [0x001A, msgClassBuf], [0x0037, subjectBuf], [0x0C1A, fromBuf],
+      [0x0E04, toBuf], [0x1000, bodyBuf], [0x1035, msgIdBuf],
+    ];
+    if (ccBuf) varProps.push([0x0E03, ccBuf]);
+
+    const fixedCount = 2;
+    const propsData = Buffer.alloc(32 + (fixedCount + varProps.length) * 16, 0);
+    let po = 32;
+    propsData.writeUInt16LE(0x0003, po); propsData.writeUInt16LE(0x0E07, po + 2);
+    propsData.writeUInt32LE(6, po + 4); propsData.writeUInt32LE(1, po + 8);
+    po += 16;
+    if (message.date) {
+      const ft = (BigInt(new Date(message.date).getTime()) + 11644473600000n) * 10000n;
+      propsData.writeUInt16LE(0x0040, po); propsData.writeUInt16LE(0x0E06, po + 2);
+      propsData.writeUInt32LE(6, po + 4); propsData.writeBigUInt64LE(ft, po + 8);
+    }
+    po += 16;
+    for (const [propId, buf] of varProps) {
+      propsData.writeUInt16LE(0x001F, po); propsData.writeUInt16LE(propId, po + 2);
+      propsData.writeUInt32LE(6, po + 4); propsData.writeUInt32LE(buf.length, po + 8);
+      po += 16;
+    }
+
+    const streams = [['__properties_version1.0', propsData]];
+    for (const [propId, buf] of varProps) {
+      streams.push([`__substg1.0_${propId.toString(16).toUpperCase().padStart(4, '0')}001F`, buf]);
+    }
+
+    const content = this._buildCfb(streams);
     return {
       content,
-      filename: `${sanitizeFilename(subject)}_${sha256?.substring(0, 8) || 'unknown'}.msg.json`,
+      filename: `${sanitizeFilename(subject)}_${sha256?.substring(0, 8) || 'unknown'}.msg`,
       hash: crypto.createHash('sha256').update(content).digest('hex'),
-      size: Buffer.byteLength(content),
+      size: content.length,
     };
+  }
+
+  static _buildCfb(streamEntries) {
+    const S = 512, MS = 64, CUT = 4096;
+    const END = 0xFFFFFFFE, FAT_M = 0xFFFFFFFD, FREE = 0xFFFFFFFF, NONE = 0xFFFFFFFF;
+
+    const mini = [], regular = [];
+    for (const [name, data] of streamEntries) {
+      (data.length < CUT ? mini : regular).push({ name, data });
+    }
+
+    let mIdx = 0;
+    const miniParts = [], miniStarts = new Map(), miniSizes = new Map();
+    for (const { name, data } of mini) {
+      miniStarts.set(name, mIdx);
+      miniSizes.set(name, data.length);
+      const cnt = Math.max(1, Math.ceil(data.length / MS));
+      const pad = Buffer.alloc(cnt * MS, 0);
+      data.copy(pad);
+      miniParts.push(pad);
+      mIdx += cnt;
+    }
+    const miniContainer = miniParts.length ? Buffer.concat(miniParts) : Buffer.alloc(0);
+    const mcSecs = miniContainer.length ? Math.ceil(miniContainer.length / S) : 0;
+
+    const mfEntries = mIdx;
+    const mfBuf = mfEntries ? Buffer.alloc(Math.max(S, Math.ceil(mfEntries * 4 / S) * S), 0xFF) : null;
+    if (mfBuf) {
+      let mi = 0;
+      for (const { data } of mini) {
+        const cnt = Math.max(1, Math.ceil(data.length / MS));
+        for (let s = 0; s < cnt; s++) { mfBuf.writeUInt32LE(s < cnt - 1 ? mi + 1 : END, mi * 4); mi++; }
+      }
+    }
+    const mfSecs = mfBuf ? Math.ceil(mfBuf.length / S) : 0;
+
+    const regSecs = regular.map(s => Math.max(1, Math.ceil(s.data.length / S)));
+    const dirCount = 1 + streamEntries.length;
+    const dirSecs = Math.max(1, Math.ceil(dirCount / 4));
+
+    let si = 0;
+    const dirStart = si; si += dirSecs;
+    const mcStart = si; si += mcSecs;
+    const mfStart = si; si += mfSecs;
+    const regStarts = new Map();
+    regular.forEach((s, i) => { regStarts.set(s.name, si); si += regSecs[i]; });
+    const dataSecs = si;
+    let fatSecs = Math.max(1, Math.ceil(dataSecs / 127));
+    while (dataSecs + fatSecs > fatSecs * 128) fatSecs++;
+    const fatStart = si; si += fatSecs;
+
+    const fatBuf = Buffer.alloc(fatSecs * S, 0xFF);
+    const fw = (idx, val) => { if (idx * 4 < fatBuf.length) fatBuf.writeUInt32LE(val, idx * 4); };
+    for (let i = dirStart; i < dirStart + dirSecs; i++) fw(i, i < dirStart + dirSecs - 1 ? i + 1 : END);
+    for (let i = mcStart; i < mcStart + mcSecs; i++) fw(i, i < mcStart + mcSecs - 1 ? i + 1 : END);
+    for (let i = mfStart; i < mfStart + mfSecs; i++) fw(i, i < mfStart + mfSecs - 1 ? i + 1 : END);
+    regular.forEach((s, ri) => { const st = regStarts.get(s.name); for (let i = st; i < st + regSecs[ri]; i++) fw(i, i < st + regSecs[ri] - 1 ? i + 1 : END); });
+    for (let i = fatStart; i < fatStart + fatSecs; i++) fw(i, FAT_M);
+
+    const dirBuf = Buffer.alloc(dirSecs * S, 0);
+    for (let i = dirCount; i < dirSecs * 4; i++) {
+      const o = i * 128;
+      dirBuf.writeUInt32LE(NONE, o + 68); dirBuf.writeUInt32LE(NONE, o + 72);
+      dirBuf.writeUInt32LE(NONE, o + 76); dirBuf.writeUInt32LE(END, o + 116);
+    }
+    const wDE = (idx, name, type, left, right, child, start, size) => {
+      const o = idx * 128;
+      const nb = Buffer.from(name + '\0', 'utf16le');
+      nb.copy(dirBuf, o, 0, Math.min(nb.length, 64));
+      dirBuf.writeUInt16LE(Math.min(nb.length, 64), o + 64);
+      dirBuf[o + 66] = type; dirBuf[o + 67] = 1;
+      dirBuf.writeUInt32LE(left, o + 68); dirBuf.writeUInt32LE(right, o + 72);
+      dirBuf.writeUInt32LE(child, o + 76);
+      dirBuf.writeUInt32LE(start, o + 116); dirBuf.writeUInt32LE(size, o + 120);
+    };
+
+    const bTree = (arr) => {
+      if (!arr.length) return null;
+      const m = arr.length >> 1;
+      return { i: arr[m], l: bTree(arr.slice(0, m)), r: bTree(arr.slice(m + 1)) };
+    };
+    const tree = bTree(streamEntries.map((_, i) => i + 1));
+    const writeNodes = (n) => {
+      if (!n) return;
+      const name = streamEntries[n.i - 1][0];
+      const ls = n.l ? n.l.i : NONE, rs = n.r ? n.r.i : NONE;
+      let start, size;
+      if (miniStarts.has(name)) { start = miniStarts.get(name); size = miniSizes.get(name); }
+      else { start = regStarts.get(name); size = regular.find(s => s.name === name).data.length; }
+      wDE(n.i, name, 2, ls, rs, NONE, start, size);
+      writeNodes(n.l); writeNodes(n.r);
+    };
+    wDE(0, 'Root Entry', 5, NONE, NONE, tree ? tree.i : NONE, mcSecs > 0 ? mcStart : END, miniContainer.length);
+    writeNodes(tree);
+
+    const hdr = Buffer.alloc(S, 0);
+    Buffer.from([0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]).copy(hdr);
+    hdr.writeUInt16LE(0x003E, 24); hdr.writeUInt16LE(0x0003, 26);
+    hdr.writeUInt16LE(0xFFFE, 28); hdr.writeUInt16LE(9, 30); hdr.writeUInt16LE(6, 32);
+    hdr.writeUInt32LE(fatSecs, 44); hdr.writeUInt32LE(dirStart, 48);
+    hdr.writeUInt32LE(CUT, 56);
+    hdr.writeUInt32LE(mfSecs > 0 ? mfStart : END, 60); hdr.writeUInt32LE(mfSecs, 64);
+    hdr.writeUInt32LE(END, 68); hdr.writeUInt32LE(0, 72);
+    for (let i = 0; i < 109; i++) hdr.writeUInt32LE(i < fatSecs ? fatStart + i : FREE, 76 + i * 4);
+
+    const pad = (b) => { const r = b.length % S; return r ? Buffer.concat([b, Buffer.alloc(S - r)]) : b; };
+    const parts = [hdr, dirBuf];
+    if (mcSecs) parts.push(pad(miniContainer));
+    if (mfSecs) parts.push(mfBuf);
+    for (const s of regular) parts.push(pad(s.data));
+    parts.push(fatBuf);
+    return Buffer.concat(parts);
   }
 
   static generateMbox(messages) {
@@ -383,7 +516,18 @@ export class ExportService {
     };
   }
 
-  static generatePdf(messages, projectId) {
+  static _groupByThread(messages) {
+    const normalize = (s) => (s || '').replace(/^(Re|Fwd|Fw)\s*:\s*/gi, '').trim().toLowerCase();
+    const threads = new Map();
+    for (const msg of messages) {
+      const key = normalize(msg.subject) || 'no-subject';
+      if (!threads.has(key)) threads.set(key, { subject: msg.subject || '(no subject)', messages: [] });
+      threads.get(key).messages.push(msg);
+    }
+    return [...threads.values()];
+  }
+
+  static generatePdf(messages, projectId, threadLabel = null) {
     const now = new Date().toISOString();
     const pdfEsc = (str) => String(str ?? '').replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
 
@@ -427,7 +571,8 @@ export class ExportService {
 
     const addGap = (px = 8) => { curY -= px; };
 
-    addLine('SherlockMail Forensic Email Report', '/F2', 16);
+    const title = threadLabel ? `Thread: ${threadLabel.substring(0, 80)}` : 'SherlockMail Forensic Email Report';
+    addLine(title, '/F2', 16);
     curY -= 6;
     addLine(`Project: ${projectId}  |  Generated: ${now}  |  Messages: ${messages.length}`, '/F1', 9);
     addLine('Tool: SherlockMail v0.9.0  |  Hash Algorithm: SHA-256', '/F1', 9);
@@ -493,7 +638,7 @@ export class ExportService {
 
     return {
       content,
-      filename: `report_${new Date().toISOString().replace(/[:.]/g, '-')}.pdf`,
+      filename: `${sanitizeFilename(threadLabel || 'report')}_${new Date().toISOString().replace(/[:.]/g, '-')}.pdf`,
       hash: crypto.createHash('sha256').update(content).digest('hex'),
       size: content.length,
       messageCount: messages.length,
