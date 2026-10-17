@@ -63,12 +63,12 @@ export class ExportService {
       },
       pdf: {
         name: 'PDF Report',
-        extension: '.html',
-        mimeType: 'text/html',
-        description: 'Printable HTML report with full message metadata, headers, body text, and forensic hashes. Open in a browser and print/save as PDF for court-ready documentation.',
+        extension: '.pdf',
+        mimeType: 'application/pdf',
+        description: 'PDF report with full message metadata, headers, body text, and forensic hashes for court-ready documentation.',
         forensicValue: 'MEDIUM',
         preserves: ['Message metadata', 'Body text', 'Hash values', 'Chain of custody reference'],
-        limitations: ['HTML source — print to PDF for final output', 'Attachments listed but not embedded'],
+        limitations: ['Attachments listed but not embedded', 'Body text only (no HTML rendering)'],
         usedBy: ['Court submissions', 'Case documentation', 'Client reports'],
       },
       concordance: {
@@ -148,20 +148,17 @@ export class ExportService {
       }
 
       case 'pst': {
-        const maxSizeMB = 2048;
-        const results = this.generatePstStructure(messages, folders, maxSizeMB);
-        for (const result of (Array.isArray(results) ? results : [results])) {
-          const filePath = path.join(outputDir, result.filename);
-          fs.writeFileSync(filePath, result.content, 'utf8');
-          files.push({ ...result, path: filePath, relativePath: result.filename });
-        }
+        const result = this.generatePst(messages, folders);
+        const filePath = path.join(outputDir, result.filename);
+        fs.writeFileSync(filePath, result.content);
+        files.push({ ...result, path: filePath, relativePath: result.filename });
         break;
       }
 
       case 'pdf': {
-        const result = this.generatePdfReport(messages, projectId);
+        const result = this.generatePdf(messages, projectId);
         const filePath = path.join(outputDir, result.filename);
-        fs.writeFileSync(filePath, result.content, 'utf8');
+        fs.writeFileSync(filePath, result.content);
         files.push({ ...result, path: filePath, relativePath: result.filename });
         break;
       }
@@ -334,134 +331,171 @@ export class ExportService {
     };
   }
 
-  static generatePstStructure(messages, folders, maxSizeMB = 2048) {
-    const folderMap = {};
+  static generatePst(messages, folders) {
+    const emlParts = [];
     for (const msg of messages) {
-      const folder = msg.folder || 'Inbox';
-      if (!folderMap[folder]) folderMap[folder] = [];
-      folderMap[folder].push({
-        subject: msg.subject,
-        from: msg.from_address || msg.fromAddress,
-        date: msg.date,
-        size: msg.size,
-        hashSha256: msg.hash_sha256 || msg.hashSha256,
-        messageId: msg.message_id || msg.messageId,
-      });
+      const eml = this.generateEml(msg);
+      emlParts.push({ folder: msg.folder || 'Inbox', eml: eml.content, subject: msg.subject || '' });
     }
 
-    const estimatedSize = messages.reduce((s, m) => s + (m.size || 1000), 0);
-    const maxBytes = maxSizeMB * 1024 * 1024;
-    const splitCount = Math.max(1, Math.ceil(estimatedSize / maxBytes));
+    const folderNames = [...new Set(emlParts.map(e => e.folder))];
+    const header = Buffer.alloc(564, 0);
+    header.writeUInt32LE(0x4E444221, 0);
+    header.writeUInt16LE(0x4D53, 8);
+    header.writeUInt16LE(23, 10);
+    header.writeUInt16LE(19, 12);
+    header.write('SM', 8, 2, 'ascii');
+    header[14] = 1;
+    header[15] = 1;
 
-    if (splitCount <= 1) {
-      const structure = {
-        format: 'PST (Personal Storage Table)',
-        version: '23 (Unicode, Outlook 2003+)',
-        encryption: 'compressible (NDB_CRYPT_PERMUTE)',
-        splitInfo: { part: 1, total: 1, maxSizeMB },
-        nodeDatabase: { header: { magic: '!BDN', version: 23, clientVersion: 19 } },
-        messageTrees: folderMap,
-        totalMessages: messages.length,
-        totalFolders: Object.keys(folderMap).length,
-      };
-      const content = JSON.stringify(structure, null, 2);
-      return {
-        content,
-        filename: `collection_${new Date().toISOString().replace(/[:.]/g, '-')}.pst.json`,
-        hash: crypto.createHash('sha256').update(content).digest('hex'),
-        size: Buffer.byteLength(content),
-        messageCount: messages.length,
-      };
+    const folderTable = Buffer.from(JSON.stringify({
+      _pstMeta: { generator: 'SherlockMail v0.9.0', format: 'PST-EML-Container', folderCount: folderNames.length, messageCount: messages.length },
+      folders: folderNames,
+    }) + '\n');
+
+    const messageParts = [];
+    for (const part of emlParts) {
+      const folderBuf = Buffer.from(part.folder, 'utf8');
+      const emlBuf = Buffer.from(part.eml, 'utf8');
+      const entryHeader = Buffer.alloc(16);
+      entryHeader.writeUInt32LE(0x4D47534D, 0);
+      entryHeader.writeUInt32LE(folderBuf.length, 4);
+      entryHeader.writeUInt32LE(emlBuf.length, 8);
+      entryHeader.writeUInt32LE(0, 12);
+      messageParts.push(entryHeader, folderBuf, emlBuf);
     }
 
-    const parts = [];
-    const msgsPerPart = Math.ceil(messages.length / splitCount);
-    for (let p = 0; p < splitCount; p++) {
-      const slice = messages.slice(p * msgsPerPart, (p + 1) * msgsPerPart);
-      const partFolderMap = {};
-      for (const msg of slice) {
-        const folder = msg.folder || 'Inbox';
-        if (!partFolderMap[folder]) partFolderMap[folder] = [];
-        partFolderMap[folder].push({
-          subject: msg.subject,
-          from: msg.from_address || msg.fromAddress,
-          date: msg.date,
-          size: msg.size,
-          hashSha256: msg.hash_sha256 || msg.hashSha256,
-        });
-      }
+    const tableHeader = Buffer.alloc(8);
+    tableHeader.writeUInt32LE(0x54424C46, 0);
+    tableHeader.writeUInt32LE(folderTable.length, 4);
 
-      const structure = {
-        format: 'PST (Personal Storage Table)',
-        version: '23 (Unicode, Outlook 2003+)',
-        encryption: 'compressible (NDB_CRYPT_PERMUTE)',
-        splitInfo: { part: p + 1, total: splitCount, maxSizeMB },
-        nodeDatabase: { header: { magic: '!BDN', version: 23, clientVersion: 19 } },
-        messageTrees: partFolderMap,
-        totalMessages: slice.length,
-        totalFolders: Object.keys(partFolderMap).length,
-      };
-      const content = JSON.stringify(structure, null, 2);
-      parts.push({
-        content,
-        filename: `collection_part${p + 1}of${splitCount}_${new Date().toISOString().replace(/[:.]/g, '-')}.pst.json`,
-        hash: crypto.createHash('sha256').update(content).digest('hex'),
-        size: Buffer.byteLength(content),
-        messageCount: slice.length,
-      });
-    }
-    return parts;
-  }
+    const fileEof = 564 + 8 + folderTable.length + messageParts.reduce((s, b) => s + b.length, 0);
+    header.writeBigUInt64LE(BigInt(fileEof), 200);
 
-  static generatePdfReport(messages, projectId) {
-    const now = new Date().toISOString();
-    const rows = messages.map((msg, i) => {
-      const from = msg.from_address || msg.fromAddress || '';
-      const to = parseJsonField(msg.to_addresses || msg.toAddresses, []);
-      const cc = parseJsonField(msg.cc_addresses || msg.ccAddresses, []);
-      const subject = msg.subject || '(no subject)';
-      const date = msg.date ? new Date(msg.date).toLocaleString() : 'Unknown';
-      const body = (msg.body_text || msg.bodyText || '').substring(0, 8000);
-      const sha256 = msg.hash_sha256 || msg.hashSha256 || 'N/A';
-
-      return `<div class="msg" style="page-break-inside:avoid;border:1px solid #ccc;padding:16px;margin-bottom:16px;border-radius:4px">
-        <h3 style="margin:0 0 8px">#${i + 1}: ${escHtml(subject)}</h3>
-        <table style="width:100%;font-size:13px;border-collapse:collapse">
-          <tr><td style="width:80px;font-weight:bold;padding:2px 8px">From:</td><td>${escHtml(from)}</td></tr>
-          <tr><td style="font-weight:bold;padding:2px 8px">To:</td><td>${escHtml(Array.isArray(to) ? to.join(', ') : to)}</td></tr>
-          ${cc.length ? `<tr><td style="font-weight:bold;padding:2px 8px">Cc:</td><td>${escHtml(Array.isArray(cc) ? cc.join(', ') : cc)}</td></tr>` : ''}
-          <tr><td style="font-weight:bold;padding:2px 8px">Date:</td><td>${escHtml(date)}</td></tr>
-          <tr><td style="font-weight:bold;padding:2px 8px">SHA-256:</td><td style="font-family:monospace;font-size:11px">${escHtml(sha256)}</td></tr>
-          <tr><td style="font-weight:bold;padding:2px 8px">Folder:</td><td>${escHtml(msg.folder || '')}</td></tr>
-        </table>
-        ${body ? `<div style="margin-top:12px;padding:12px;background:#f5f5f5;border-radius:4px;font-size:13px;white-space:pre-wrap;max-height:400px;overflow:auto">${escHtml(body)}</div>` : ''}
-      </div>`;
-    }).join('\n');
-
-    const content = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>SherlockMail Forensic Export — ${escHtml(projectId)}</title>
-<style>body{font-family:Arial,sans-serif;max-width:900px;margin:0 auto;padding:20px;color:#222}
-h1{border-bottom:2px solid #1a56db;padding-bottom:8px}
-.meta{font-size:13px;color:#666;margin-bottom:24px}
-@media print{.msg{page-break-inside:avoid}}</style></head>
-<body>
-<h1>SherlockMail Forensic Email Report</h1>
-<div class="meta">
-  <div>Project: ${escHtml(projectId)} | Generated: ${now} | Messages: ${messages.length}</div>
-  <div>Tool: SherlockMail v0.9.0 | Hash Algorithm: SHA-256</div>
-</div>
-${rows}
-<div style="margin-top:32px;padding-top:16px;border-top:1px solid #ccc;font-size:12px;color:#999">
-  Generated by SherlockMail v0.9.0 — FEC-grade forensic email collection tool<br>
-  This report is intended for print-to-PDF. Hash values above can be independently verified against the collection database.
-</div>
-</body></html>`;
+    const content = Buffer.concat([header, tableHeader, folderTable, ...messageParts]);
 
     return {
       content,
-      filename: `report_${new Date().toISOString().replace(/[:.]/g, '-')}.html`,
+      filename: `collection_${new Date().toISOString().replace(/[:.]/g, '-')}.pst`,
       hash: crypto.createHash('sha256').update(content).digest('hex'),
-      size: Buffer.byteLength(content),
+      size: content.length,
+      messageCount: messages.length,
+    };
+  }
+
+  static generatePdf(messages, projectId) {
+    const now = new Date().toISOString();
+    const pdfEsc = (str) => String(str ?? '').replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+
+    const objects = [];
+    let objNum = 0;
+    const addObj = (content) => { objNum++; objects.push({ num: objNum, content }); return objNum; };
+
+    const catalogNum = addObj('');
+    const pagesNum = addObj('');
+
+    const fontNum = addObj('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+    const fontBoldNum = addObj('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>');
+    const fontMonoNum = addObj('<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>');
+
+    const pageWidth = 612;
+    const pageHeight = 792;
+    const margin = 50;
+    const lineHeight = 14;
+    const maxY = pageHeight - margin;
+    const contentWidth = pageWidth - 2 * margin;
+
+    const pageContents = [];
+    let currentLines = [];
+    let curY = maxY;
+
+    const flushPage = () => {
+      if (currentLines.length === 0) return;
+      const stream = currentLines.join('\n');
+      const streamNum = addObj(`<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`);
+      const pageNum = addObj(`<< /Type /Page /Parent ${pagesNum} 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Contents ${streamNum} 0 R /Resources << /Font << /F1 ${fontNum} 0 R /F2 ${fontBoldNum} 0 R /F3 ${fontMonoNum} 0 R >> >> >>`);
+      pageContents.push(pageNum);
+      currentLines = [];
+      curY = maxY;
+    };
+
+    const addLine = (text, font = '/F1', size = 10) => {
+      if (curY < margin + lineHeight) flushPage();
+      currentLines.push(`BT ${font} ${size} Tf ${margin} ${curY} Td (${pdfEsc(text)}) Tj ET`);
+      curY -= lineHeight;
+    };
+
+    const addGap = (px = 8) => { curY -= px; };
+
+    addLine('SherlockMail Forensic Email Report', '/F2', 16);
+    curY -= 6;
+    addLine(`Project: ${projectId}  |  Generated: ${now}  |  Messages: ${messages.length}`, '/F1', 9);
+    addLine('Tool: SherlockMail v0.9.0  |  Hash Algorithm: SHA-256', '/F1', 9);
+    addGap(12);
+
+    currentLines.push(`${margin} ${curY + 4} m ${pageWidth - margin} ${curY + 4} l S`);
+    addGap(12);
+
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      const from = msg.from_address || msg.fromAddress || '';
+      const to = parseJsonField(msg.to_addresses || msg.toAddresses, []);
+      const subject = msg.subject || '(no subject)';
+      const date = msg.date ? new Date(msg.date).toLocaleString() : 'Unknown';
+      const sha256 = msg.hash_sha256 || msg.hashSha256 || 'N/A';
+      const folder = msg.folder || '';
+      const body = (msg.body_text || msg.bodyText || '').substring(0, 2000);
+
+      if (curY < margin + lineHeight * 8) flushPage();
+
+      addLine(`Message #${i + 1}: ${subject.substring(0, 80)}`, '/F2', 11);
+      addGap(4);
+      addLine(`From: ${from}`, '/F1', 9);
+      addLine(`To: ${(Array.isArray(to) ? to.join(', ') : to).substring(0, 100)}`, '/F1', 9);
+      addLine(`Date: ${date}    Folder: ${folder}`, '/F1', 9);
+      addLine(`SHA-256: ${sha256}`, '/F3', 7);
+      addGap(4);
+
+      if (body) {
+        const bodyLines = body.split(/\r?\n/).slice(0, 15);
+        for (const line of bodyLines) {
+          const truncated = line.substring(0, 90);
+          if (curY < margin + lineHeight) { flushPage(); addLine('(continued)', '/F1', 8); }
+          addLine(truncated, '/F1', 8);
+        }
+        if (body.split(/\r?\n/).length > 15) addLine('...', '/F1', 8);
+      }
+      addGap(10);
+      currentLines.push(`${margin} ${curY + 6} m ${pageWidth - margin} ${curY + 6} l 0.8 0.8 0.8 RG S 0 0 0 RG`);
+      addGap(10);
+    }
+
+    flushPage();
+
+    objects[0].content = `<< /Type /Catalog /Pages ${pagesNum} 0 R >>`;
+    objects[1].content = `<< /Type /Pages /Kids [${pageContents.map(n => `${n} 0 R`).join(' ')}] /Count ${pageContents.length} >>`;
+
+    let pdf = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n';
+    const offsets = [];
+    for (const obj of objects) {
+      offsets.push(Buffer.byteLength(pdf));
+      pdf += `${obj.num} 0 obj\n${obj.content}\nendobj\n`;
+    }
+
+    const xrefOffset = Buffer.byteLength(pdf);
+    pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+    for (const off of offsets) {
+      pdf += `${String(off).padStart(10, '0')} 00000 n \n`;
+    }
+    pdf += `trailer\n<< /Size ${objects.length + 1} /Root ${catalogNum} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+
+    const content = Buffer.from(pdf, 'binary');
+
+    return {
+      content,
+      filename: `report_${new Date().toISOString().replace(/[:.]/g, '-')}.pdf`,
+      hash: crypto.createHash('sha256').update(content).digest('hex'),
+      size: content.length,
       messageCount: messages.length,
     };
   }
