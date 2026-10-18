@@ -9,7 +9,7 @@ import {
   saveSearchQuery, getSearchQueries, saveExportRecord, getExportRecords, updateExportRecord,
   getAuditLog, getFullAuditLog, getStats, addAuditEntry,
   getMessage, getAllProjectMessages, updateAcquisition, getAcquisitions,
-  saveAttachment, getAttachments,
+  saveAttachment, getAttachments, getProjectAttachments,
   saveDriveLink, getDriveLinks,
   saveTimestampRecord, getTimestampRecords,
   saveInlineSearch, getInlineSearches,
@@ -460,20 +460,66 @@ router.post('/projects/:id/folders', (req, res) => {
 });
 
 // ── Collection / Acquisition ──
+
+const MAX_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 1000;
+
+async function retryWithBackoff(fn, retries = MAX_RETRIES) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt === retries) throw err;
+      const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+}
+
+function processMessageItem(msg, projectId, acquisitionId, existingIds, differential, errors) {
+  const isDuplicate = differential && (existingIds.has(msg.messageId) || existingIds.has(msg.hashSha256));
+  if (isDuplicate) return 'skipped';
+
+  try {
+    msg.projectId = projectId;
+    msg.acquisitionId = acquisitionId;
+    saveMessage(msg);
+    if (msg.attachments) {
+      for (const att of msg.attachments) {
+        saveAttachment({ ...att, messageId: msg.id });
+      }
+    }
+    return 'acquired';
+  } catch (err) {
+    errors.push({
+      messageId: msg.messageId || msg.id,
+      subject: (msg.subject || '').slice(0, 100),
+      folder: msg.folder,
+      error: err.message,
+      timestamp: new Date().toISOString(),
+    });
+    return 'failed';
+  }
+}
+
 router.post('/projects/:id/collect', async (req, res) => {
   const project = getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
   const { folders: selectedFolders, searchQuery, config, differential } = req.body;
   const limit = req.body.limit || 50;
+  const batchSize = req.body.batchSize || 500;
   const acquisitionId = createAcquisition(project.id, selectedFolders);
   updateProjectStatus(project.id, 'collecting');
 
   try {
     let handler;
-    let allMessages = [];
+    const allMessages = [];
     let skippedCount = 0;
+    let failedCount = 0;
+    const errors = [];
     const targetFolders = selectedFolders || ['INBOX'];
+    const folderStats = {};
 
     const existingIds = new Set();
     if (differential) {
@@ -488,152 +534,95 @@ router.post('/projects/:id/collect', async (req, res) => {
       case 'imap': {
         if (!config?.host) throw new Error('IMAP host is required');
         handler = new ImapHandler(config);
-        await handler.connect();
+        await retryWithBackoff(() => handler.connect());
 
         for (const folder of targetFolders) {
-          const messages = await handler.fetchMessages(folder, { limit, searchCriteria: searchQuery });
-          for (const msg of messages) {
-            if (differential && (existingIds.has(msg.messageId) || existingIds.has(msg.hashSha256))) {
-              skippedCount++;
-              continue;
+          const stats = { acquired: 0, skipped: 0, failed: 0 };
+          try {
+            const messages = await retryWithBackoff(() =>
+              handler.fetchMessages(folder, { limit, searchCriteria: searchQuery })
+            );
+            for (const msg of messages) {
+              msg.folder = msg.folder || folder;
+              const result = processMessageItem(msg, project.id, acquisitionId, existingIds, differential, errors);
+              if (result === 'skipped') { skippedCount++; stats.skipped++; }
+              else if (result === 'failed') { failedCount++; stats.failed++; }
+              else { allMessages.push(msg); stats.acquired++; }
             }
-            msg.projectId = project.id;
-            msg.acquisitionId = acquisitionId;
-            saveMessage(msg);
-            if (msg.attachments) {
-              for (const att of msg.attachments) {
-                saveAttachment({ ...att, messageId: msg.id });
-              }
-            }
-            allMessages.push(msg);
+          } catch (folderErr) {
+            errors.push({ folder, error: folderErr.message, timestamp: new Date().toISOString(), type: 'folder_error' });
           }
+          folderStats[folder] = stats;
         }
 
-        await handler.disconnect();
+        await handler.disconnect().catch(() => {});
         break;
       }
 
       case 'pop3': {
         if (!config?.host) throw new Error('POP3 host is required');
         handler = new Pop3Handler(config);
-        await handler.connect();
+        await retryWithBackoff(() => handler.connect());
 
         const msgList = await handler.listMessages();
         const fetchCount = Math.min(msgList.length, limit);
+        const stats = { acquired: 0, skipped: 0, failed: 0 };
 
         for (let i = 0; i < fetchCount; i++) {
-          const msg = await handler.fetchMessage(msgList[i].number);
-          if (differential && (existingIds.has(msg.messageId) || existingIds.has(msg.hashSha256))) {
-            skippedCount++;
-            continue;
+          try {
+            const msg = await retryWithBackoff(() => handler.fetchMessage(msgList[i].number));
+            msg.folder = msg.folder || 'INBOX';
+            const result = processMessageItem(msg, project.id, acquisitionId, existingIds, differential, errors);
+            if (result === 'skipped') { skippedCount++; stats.skipped++; }
+            else if (result === 'failed') { failedCount++; stats.failed++; }
+            else { allMessages.push(msg); stats.acquired++; }
+          } catch (msgErr) {
+            failedCount++;
+            stats.failed++;
+            errors.push({ index: i, error: msgErr.message, timestamp: new Date().toISOString(), type: 'message_fetch_error' });
           }
-          msg.projectId = project.id;
-          msg.acquisitionId = acquisitionId;
-          saveMessage(msg);
-          if (msg.attachments) {
-            for (const att of msg.attachments) {
-              saveAttachment({ ...att, messageId: msg.id });
-            }
-          }
-          allMessages.push(msg);
         }
+        folderStats['INBOX'] = stats;
 
-        await handler.disconnect();
+        await handler.disconnect().catch(() => {});
         break;
       }
 
-      case 'ews': {
-        handler = new EwsHandler(config || { email: project.target_email });
-        await handler.connect();
-
-        for (const folder of targetFolders) {
-          const messages = await handler.fetchMessages(folder, { limit });
-          for (const msg of messages) {
-            if (differential && existingIds.has(msg.hashSha256)) { skippedCount++; continue; }
-            msg.projectId = project.id;
-            msg.acquisitionId = acquisitionId;
-            saveMessage(msg);
-            allMessages.push(msg);
-          }
-        }
-
-        await handler.disconnect();
-        break;
-      }
-
-      case 'graph': {
-        handler = new GraphHandler(config || { email: project.target_email, authType: 'delegated' });
-        await handler.connect();
-
-        for (const folder of targetFolders) {
-          const messages = await handler.fetchMessages(folder, { limit });
-          for (const msg of messages) {
-            if (differential && existingIds.has(msg.hashSha256)) { skippedCount++; continue; }
-            msg.projectId = project.id;
-            msg.acquisitionId = acquisitionId;
-            saveMessage(msg);
-            allMessages.push(msg);
-          }
-        }
-
-        await handler.disconnect();
-        break;
-      }
-
-      case 'gmail_api': {
-        handler = new GmailHandler(config || { email: project.target_email, authType: 'oauth2' });
-        await handler.connect();
-
-        for (const folder of targetFolders) {
-          const messages = await handler.fetchMessages(folder, { limit });
-          for (const msg of messages) {
-            if (differential && existingIds.has(msg.hashSha256)) { skippedCount++; continue; }
-            msg.projectId = project.id;
-            msg.acquisitionId = acquisitionId;
-            saveMessage(msg);
-            allMessages.push(msg);
-          }
-        }
-
-        await handler.disconnect();
-        break;
-      }
-
-      case 'zoho_api': {
-        handler = new ZohoHandler(config || { email: project.target_email });
-        await handler.connect();
-
-        for (const folder of targetFolders) {
-          const messages = await handler.fetchMessages(folder, { limit });
-          for (const msg of messages) {
-            if (differential && existingIds.has(msg.hashSha256)) { skippedCount++; continue; }
-            msg.projectId = project.id;
-            msg.acquisitionId = acquisitionId;
-            saveMessage(msg);
-            allMessages.push(msg);
-          }
-        }
-
-        await handler.disconnect();
-        break;
-      }
-
+      case 'ews':
+      case 'graph':
+      case 'gmail_api':
+      case 'zoho_api':
       case 'jmap': {
-        handler = new JmapHandler(config || { email: project.target_email });
-        await handler.connect();
+        const handlers = {
+          ews:      () => new EwsHandler(config || { email: project.target_email }),
+          graph:    () => new GraphHandler(config || { email: project.target_email, authType: 'delegated' }),
+          gmail_api:() => new GmailHandler(config || { email: project.target_email, authType: 'oauth2' }),
+          zoho_api: () => new ZohoHandler(config || { email: project.target_email }),
+          jmap:     () => new JmapHandler(config || { email: project.target_email }),
+        };
+        handler = handlers[project.provider_type]();
+        await retryWithBackoff(() => handler.connect());
 
         for (const folder of targetFolders) {
-          const messages = await handler.fetchMessages(folder, { limit });
-          for (const msg of messages) {
-            if (differential && existingIds.has(msg.hashSha256)) { skippedCount++; continue; }
-            msg.projectId = project.id;
-            msg.acquisitionId = acquisitionId;
-            saveMessage(msg);
-            allMessages.push(msg);
+          const stats = { acquired: 0, skipped: 0, failed: 0 };
+          try {
+            const messages = await retryWithBackoff(() =>
+              handler.fetchMessages(folder, { limit, searchCriteria: searchQuery })
+            );
+            for (const msg of messages) {
+              msg.folder = msg.folder || folder;
+              const result = processMessageItem(msg, project.id, acquisitionId, existingIds, differential, errors);
+              if (result === 'skipped') { skippedCount++; stats.skipped++; }
+              else if (result === 'failed') { failedCount++; stats.failed++; }
+              else { allMessages.push(msg); stats.acquired++; }
+            }
+          } catch (folderErr) {
+            errors.push({ folder, error: folderErr.message, timestamp: new Date().toISOString(), type: 'folder_error' });
           }
+          folderStats[folder] = stats;
         }
 
-        await handler.disconnect();
+        await handler.disconnect().catch(() => {});
         break;
       }
 
@@ -642,26 +631,33 @@ router.post('/projects/:id/collect', async (req, res) => {
     }
 
     const totalBytes = allMessages.reduce((sum, m) => sum + (m.size || 0), 0);
+    const status = failedCount > 0 && allMessages.length === 0 ? 'failed'
+      : failedCount > 0 ? 'completed_with_errors' : 'completed';
 
     updateAcquisition(acquisitionId, {
-      status: 'completed',
-      totalMessages: allMessages.length + skippedCount,
+      status,
+      totalMessages: allMessages.length + skippedCount + failedCount,
       acquiredMessages: allMessages.length,
-      failedMessages: 0,
+      failedMessages: failedCount,
+      skippedMessages: skippedCount,
       totalBytes,
       protocolLog: handler?.getProtocolLog() || [],
+      errorLog: errors.length > 0 ? errors : null,
     });
 
-    updateProjectStatus(project.id, 'completed');
+    updateProjectStatus(project.id, status === 'failed' ? 'error' : 'completed');
 
-    addAuditEntry(project.id, 'ACQUISITION_COMPLETED', `Acquired ${allMessages.length} messages via ${project.provider_type.toUpperCase()}${differential ? ` (differential: ${skippedCount} skipped)` : ''}`, {
+    addAuditEntry(project.id, 'ACQUISITION_COMPLETED', `Acquired ${allMessages.length} messages via ${project.provider_type.toUpperCase()}${differential ? ` (differential: ${skippedCount} skipped)` : ''}${failedCount > 0 ? ` (${failedCount} failed)` : ''}`, {
       acquisitionId,
       messageCount: allMessages.length,
       skippedCount,
+      failedCount,
       differential: !!differential,
       totalBytes,
       folders: targetFolders,
+      folderStats,
       protocol: project.provider_type,
+      errors: errors.slice(0, 50),
     }, project.examiner_name, acquisitionId);
 
     const tsResult = TimestampService.timestampCollection(project.id, allMessages);
@@ -669,15 +665,19 @@ router.post('/projects/:id/collect', async (req, res) => {
 
     res.json({
       acquisitionId,
+      status,
       messageCount: allMessages.length,
       skippedCount,
+      failedCount,
       differential: !!differential,
       totalBytes,
+      folderStats,
+      errors: errors.slice(0, 50),
       protocolLog: handler?.getProtocolLog() || [],
       timestamp: tsResult.timestamp.genTime,
     });
   } catch (err) {
-    updateAcquisition(acquisitionId, { status: 'failed' });
+    updateAcquisition(acquisitionId, { status: 'failed', errorLog: [{ error: err.message, timestamp: new Date().toISOString(), type: 'fatal' }] });
     updateProjectStatus(project.id, 'error');
     addAuditEntry(project.id, 'ACQUISITION_FAILED', err.message, { acquisitionId, error: err.message });
     res.status(500).json({ error: err.message });
@@ -869,8 +869,11 @@ router.post('/projects/:id/qc', (req, res) => {
   const acquisitions = getAcquisitions(project.id);
   const folders = getFolders(project.id);
   const exports = getExportRecords(project.id);
+  const attachments = getProjectAttachments(project.id);
+  const timestamps = getTimestampRecords(project.id);
+  const driveLinks = getDriveLinks(project.id);
 
-  const results = QualityControlService.runChecks(project, messages, acquisitions, folders, exports);
+  const results = QualityControlService.runChecks(project, messages, acquisitions, folders, exports, { attachments, timestamps, driveLinks });
   saveQcResult(project.id, results);
 
   addAuditEntry(project.id, 'QC_COMPLETED', `Quality control: ${results.summary.passed} passed, ${results.summary.warnings} warnings, ${results.summary.failed} failed`, {
@@ -1270,12 +1273,16 @@ router.get('/projects/:id/messages/:msgId/headers', (req, res) => {
     if (dmarcMatch) authentication.dmarc = dmarcMatch[1].toLowerCase();
   }
 
-  const dkimSig = headers['dkim-signature'] || headers['DKIM-Signature'] || '';
-  const dkimDomain = dkimSig ? (dkimSig.match(/d=([^;\s]+)/)?.[1] || null) : null;
+  const rawDkimSig = headers['dkim-signature'] || headers['DKIM-Signature'] || '';
+  const dkimSig = Array.isArray(rawDkimSig) ? rawDkimSig[0] || '' : rawDkimSig;
+  const dkimDomain = dkimSig ? (String(dkimSig).match(/d=([^;\s]+)/)?.[1] || null) : null;
 
-  const returnPath = headers['return-path'] || headers['Return-Path'] || '';
-  const replyTo = headers['reply-to'] || headers['Reply-To'] || '';
-  const fromHeader = headers.from || headers.From || msg.from_address || '';
+  const rawReturnPath = headers['return-path'] || headers['Return-Path'] || '';
+  const returnPath = Array.isArray(rawReturnPath) ? rawReturnPath[0] || '' : String(rawReturnPath);
+  const rawReplyTo = headers['reply-to'] || headers['Reply-To'] || '';
+  const replyTo = Array.isArray(rawReplyTo) ? rawReplyTo[0] || '' : String(rawReplyTo);
+  const rawFrom = headers.from || headers.From || msg.from_address || '';
+  const fromHeader = Array.isArray(rawFrom) ? rawFrom[0] || '' : String(rawFrom);
 
   const redFlags = [];
   if (returnPath && fromHeader && !returnPath.toLowerCase().includes(fromHeader.toLowerCase().replace(/.*</, '').replace(/>.*/, '').split('@')[1] || '__none__')) {
@@ -1448,7 +1455,7 @@ router.post('/projects/:id/export', (req, res) => {
 
   try {
     const exportId = crypto.randomUUID();
-    const options = {};
+    const options = { provider: project.provider_type || 'Unknown', preserveFolders: req.body.preserveFolders };
     if (pdfSplitMode) options.pdfSplitMode = pdfSplitMode;
     const { files, manifest, outputDir } = ExportService.exportToFiles(project.id, exportId, format, messages, folders, customOutputDir, options);
 

@@ -2,7 +2,7 @@ import crypto from 'crypto';
 
 export class QualityControlService {
 
-  static runChecks(project, messages, acquisitions, folders, exports) {
+  static runChecks(project, messages, acquisitions, folders, exports, options = {}) {
     const startTime = Date.now();
     const checks = [];
 
@@ -17,6 +17,12 @@ export class QualityControlService {
     checks.push(this.checkEncryptionDetection(messages));
     checks.push(this.checkWriteProtection(project));
     checks.push(this.checkStandardsCompliance(project, messages, acquisitions));
+    checks.push(this.checkAttachmentCompleteness(messages, options.attachments || []));
+    checks.push(this.checkTimestampVerification(options.timestamps || []));
+    checks.push(this.checkProtocolLogCompleteness(acquisitions));
+    checks.push(this.checkCloudAttachmentCoverage(messages, options.driveLinks || []));
+    checks.push(this.checkExportIntegrity(exports));
+    checks.push(this.checkCollectionResumability(acquisitions));
 
     const elapsed = Date.now() - startTime;
     const passed = checks.filter(c => c.status === 'pass').length;
@@ -299,6 +305,195 @@ export class QualityControlService {
     } else {
       check.status = 'fail';
       check.detail = issues.join('; ');
+    }
+    return check;
+  }
+
+  static checkAttachmentCompleteness(messages, attachments) {
+    const check = { name: 'Attachment Completeness', category: 'data_quality' };
+    let expectedCount = 0;
+    let actualCount = attachments.length;
+    let missingHash = 0;
+
+    for (const m of messages) {
+      expectedCount += (m.attachment_count || m.attachmentCount || 0);
+    }
+
+    for (const att of attachments) {
+      if (!(att.hash_sha256 || att.hashSha256)) missingHash++;
+    }
+
+    check.metrics = { expected: expectedCount, actual: actualCount, missingHash };
+
+    if (expectedCount === 0) {
+      check.status = 'pass';
+      check.detail = 'No attachments expected';
+    } else if (actualCount >= expectedCount && missingHash === 0) {
+      check.status = 'pass';
+      check.detail = `All ${actualCount} attachments collected and hashed`;
+    } else if (actualCount < expectedCount) {
+      check.status = 'warning';
+      check.detail = `${actualCount} of ${expectedCount} expected attachments collected`;
+    } else {
+      check.status = missingHash > 0 ? 'warning' : 'pass';
+      check.detail = `${actualCount} attachments collected; ${missingHash} missing hash values`;
+    }
+    return check;
+  }
+
+  static checkTimestampVerification(timestamps) {
+    const check = { name: 'Timestamp Verification', category: 'forensic' };
+
+    if (!timestamps || timestamps.length === 0) {
+      return { ...check, status: 'warning', detail: 'No timestamps recorded — forensic timeline cannot be verified', metrics: { count: 0 } };
+    }
+
+    let collectionTs = 0;
+    let exportTs = 0;
+    let internalOnly = 0;
+
+    for (const ts of timestamps) {
+      const data = typeof ts.timestamp_data === 'string' ? JSON.parse(ts.timestamp_data) : ts.timestamp_data;
+      if (ts.type === 'collection') collectionTs++;
+      if (ts.type === 'export') exportTs++;
+      if (data?.tsa?.name === 'SherlockMail Internal TSA') internalOnly++;
+    }
+
+    check.metrics = { total: timestamps.length, collection: collectionTs, export: exportTs, internalOnly };
+
+    if (collectionTs > 0 && exportTs > 0) {
+      check.status = internalOnly === timestamps.length ? 'warning' : 'pass';
+      check.detail = internalOnly === timestamps.length
+        ? `${timestamps.length} timestamps present but all are internal — use a production TSA for evidentiary weight`
+        : `${timestamps.length} timestamps verified (${collectionTs} collection, ${exportTs} export)`;
+    } else {
+      check.status = 'warning';
+      check.detail = `Incomplete timestamps: ${collectionTs} collection, ${exportTs} export — both are needed for chain of custody`;
+    }
+    return check;
+  }
+
+  static checkProtocolLogCompleteness(acquisitions) {
+    const check = { name: 'Protocol Log Completeness', category: 'forensic' };
+
+    if (!acquisitions || acquisitions.length === 0) {
+      return { ...check, status: 'warning', detail: 'No acquisitions recorded', metrics: { count: 0 } };
+    }
+
+    let withLog = 0;
+    let withErrors = 0;
+    let totalErrors = 0;
+
+    for (const acq of acquisitions) {
+      const log = acq.protocol_log ? (typeof acq.protocol_log === 'string' ? JSON.parse(acq.protocol_log) : acq.protocol_log) : [];
+      if (log.length > 0) withLog++;
+      const errLog = acq.error_log ? (typeof acq.error_log === 'string' ? JSON.parse(acq.error_log) : acq.error_log) : [];
+      if (errLog.length > 0) { withErrors++; totalErrors += errLog.length; }
+    }
+
+    check.metrics = { acquisitions: acquisitions.length, withProtocolLog: withLog, withErrors, totalErrors };
+
+    if (withLog === acquisitions.length && totalErrors === 0) {
+      check.status = 'pass';
+      check.detail = `All ${acquisitions.length} acquisition(s) have protocol logs with no errors`;
+    } else if (totalErrors > 0) {
+      check.status = 'warning';
+      check.detail = `${totalErrors} error(s) across ${withErrors} acquisition(s) — review error logs for data gaps`;
+    } else {
+      check.status = 'warning';
+      check.detail = `${acquisitions.length - withLog} acquisition(s) missing protocol logs`;
+    }
+    return check;
+  }
+
+  static checkCloudAttachmentCoverage(messages, driveLinks) {
+    const check = { name: 'Cloud Attachment Coverage', category: 'data_quality' };
+
+    if (!driveLinks || driveLinks.length === 0) {
+      check.status = 'pass';
+      check.detail = 'No cloud attachment links detected';
+      check.metrics = { totalLinks: 0 };
+      return check;
+    }
+
+    let detected = 0;
+    let downloaded = 0;
+    let pending = 0;
+
+    for (const link of driveLinks) {
+      detected++;
+      if (link.status === 'downloaded' || link.local_path) downloaded++;
+      else pending++;
+    }
+
+    check.metrics = { detected, downloaded, pending };
+
+    if (pending === 0) {
+      check.status = 'pass';
+      check.detail = `All ${detected} cloud attachment link(s) preserved`;
+    } else {
+      check.status = 'warning';
+      check.detail = `${pending} of ${detected} cloud attachment link(s) not yet preserved — external content may be lost`;
+    }
+    return check;
+  }
+
+  static checkExportIntegrity(exports) {
+    const check = { name: 'Export Integrity', category: 'export' };
+
+    if (!exports || exports.length === 0) {
+      return { ...check, status: 'warning', detail: 'No exports performed', metrics: { count: 0 } };
+    }
+
+    let withHash = 0;
+    let failedExports = 0;
+
+    for (const exp of exports) {
+      if (exp.hash_sha256 || exp.hashSha256) withHash++;
+      if (exp.status === 'failed') failedExports++;
+    }
+
+    check.metrics = { total: exports.length, withHash, failed: failedExports };
+
+    if (failedExports > 0) {
+      check.status = 'fail';
+      check.detail = `${failedExports} export(s) failed — re-export required`;
+    } else if (withHash === exports.length) {
+      check.status = 'pass';
+      check.detail = `All ${exports.length} export(s) have verified SHA-256 manifest hashes`;
+    } else {
+      check.status = 'warning';
+      check.detail = `${exports.length - withHash} export(s) missing manifest hash — integrity cannot be verified`;
+    }
+    return check;
+  }
+
+  static checkCollectionResumability(acquisitions) {
+    const check = { name: 'Collection Resumability', category: 'collection' };
+
+    if (!acquisitions || acquisitions.length === 0) {
+      return { ...check, status: 'pass', detail: 'No acquisitions to assess', metrics: { count: 0 } };
+    }
+
+    let interrupted = 0;
+    let completedWithErrors = 0;
+
+    for (const acq of acquisitions) {
+      if (acq.status === 'failed' || acq.status === 'paused') interrupted++;
+      if (acq.status === 'completed_with_errors') completedWithErrors++;
+    }
+
+    check.metrics = { total: acquisitions.length, interrupted, completedWithErrors };
+
+    if (interrupted > 0) {
+      check.status = 'warning';
+      check.detail = `${interrupted} acquisition(s) interrupted — use differential collection to resume and capture missing messages`;
+    } else if (completedWithErrors > 0) {
+      check.status = 'warning';
+      check.detail = `${completedWithErrors} acquisition(s) completed with errors — re-run differential collection to retry failed items`;
+    } else {
+      check.status = 'pass';
+      check.detail = `All ${acquisitions.length} acquisition(s) completed successfully`;
     }
     return check;
   }

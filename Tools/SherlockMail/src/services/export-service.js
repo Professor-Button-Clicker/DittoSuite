@@ -111,15 +111,27 @@ export class ExportService {
     const files = [];
     let emailsFailed = 0;
     let attachmentsFailed = 0;
+    const provider = options.provider || 'Unknown';
+    const preserveFolders = options.preserveFolders !== false;
+    const folderCounters = {};
 
     switch (format) {
       case 'eml':
         for (const msg of messages) {
           try {
             const result = this.generateEml(msg);
-            const filePath = path.join(outputDir, result.filename);
+            const folder = msg.folder || msg.folder_path || 'INBOX';
+            const folderName = sanitizeFilename(folder.split('/').pop() || folder);
+            folderCounters[folder] = (folderCounters[folder] || 0) + 1;
+            const n = folderCounters[folder];
+            const hash8 = (msg.hash_sha256 || msg.hashSha256 || 'unknown').substring(0, 8);
+            result.filename = `${sanitizeFilename(provider)}_message_${n}_from_${folderName}_${hash8}.eml`;
+            const subDir = preserveFolders ? path.join(outputDir, sanitizePath(folder)) : outputDir;
+            fs.mkdirSync(subDir, { recursive: true });
+            const filePath = path.join(subDir, result.filename);
+            const relativePath = preserveFolders ? path.join(sanitizePath(folder), result.filename) : result.filename;
             fs.writeFileSync(filePath, result.content, 'utf8');
-            files.push({ ...result, path: filePath, relativePath: result.filename });
+            files.push({ ...result, path: filePath, relativePath });
           } catch { emailsFailed++; }
         }
         break;
@@ -128,10 +140,18 @@ export class ExportService {
         for (const msg of messages) {
           try {
             const result = this.generateEml(msg);
-            result.filename = result.filename.replace('.eml', '.mime');
-            const filePath = path.join(outputDir, result.filename);
+            const folder = msg.folder || msg.folder_path || 'INBOX';
+            const folderName = sanitizeFilename(folder.split('/').pop() || folder);
+            folderCounters[folder] = (folderCounters[folder] || 0) + 1;
+            const n = folderCounters[folder];
+            const hash8 = (msg.hash_sha256 || msg.hashSha256 || 'unknown').substring(0, 8);
+            result.filename = `${sanitizeFilename(provider)}_message_${n}_from_${folderName}_${hash8}.mime`;
+            const subDir = preserveFolders ? path.join(outputDir, sanitizePath(folder)) : outputDir;
+            fs.mkdirSync(subDir, { recursive: true });
+            const filePath = path.join(subDir, result.filename);
+            const relativePath = preserveFolders ? path.join(sanitizePath(folder), result.filename) : result.filename;
             fs.writeFileSync(filePath, result.content, 'utf8');
-            files.push({ ...result, path: filePath, relativePath: result.filename });
+            files.push({ ...result, path: filePath, relativePath });
           } catch { emailsFailed++; }
         }
         break;
@@ -140,9 +160,18 @@ export class ExportService {
         for (const msg of messages) {
           try {
             const result = this.generateMsg(msg);
-            const filePath = path.join(outputDir, result.filename);
+            const folder = msg.folder || msg.folder_path || 'INBOX';
+            const folderName = sanitizeFilename(folder.split('/').pop() || folder);
+            folderCounters[folder] = (folderCounters[folder] || 0) + 1;
+            const n = folderCounters[folder];
+            const hash8 = (msg.hash_sha256 || msg.hashSha256 || 'unknown').substring(0, 8);
+            result.filename = `${sanitizeFilename(provider)}_message_${n}_from_${folderName}_${hash8}.msg`;
+            const subDir = preserveFolders ? path.join(outputDir, sanitizePath(folder)) : outputDir;
+            fs.mkdirSync(subDir, { recursive: true });
+            const filePath = path.join(subDir, result.filename);
+            const relativePath = preserveFolders ? path.join(sanitizePath(folder), result.filename) : result.filename;
             fs.writeFileSync(filePath, result.content);
-            files.push({ ...result, path: filePath, relativePath: result.filename });
+            files.push({ ...result, path: filePath, relativePath });
           } catch { emailsFailed++; }
         }
         break;
@@ -942,6 +971,13 @@ function sanitizeFilename(name) {
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
     .replace(/\s+/g, '_')
     .substring(0, 60);
+}
+
+function sanitizePath(folderPath) {
+  return (folderPath || 'INBOX')
+    .split('/')
+    .map(seg => seg.replace(/[<>:"|?*\x00-\x1f]/g, '_').replace(/\s+/g, '_'))
+    .join(path.sep);
 }
 
 function escHtml(str) {

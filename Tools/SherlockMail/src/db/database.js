@@ -52,7 +52,7 @@ function computeAuditHash(entry, prevHash) {
 
 export function addAuditEntry(projectId, eventType, description, details, examiner, acquisitionId) {
   const d = getDb();
-  const prev = d.prepare('SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1').get();
+  const prev = d.prepare('SELECT hash FROM audit_log WHERE project_id = ? ORDER BY id DESC LIMIT 1').get(projectId);
   const prevHash = prev?.hash || null;
   const timestamp = new Date().toISOString();
   const entry = { timestamp, event_type: eventType, description, details: JSON.stringify(details || {}) };
@@ -310,7 +310,9 @@ export function updateAcquisition(id, data) {
   if (data.acquiredMessages != null) { sets.push('acquired_messages = ?'); vals.push(data.acquiredMessages); }
   if (data.failedMessages != null) { sets.push('failed_messages = ?'); vals.push(data.failedMessages); }
   if (data.totalBytes != null) { sets.push('total_bytes = ?'); vals.push(data.totalBytes); }
+  if (data.skippedMessages != null) { sets.push('skipped_messages = ?'); vals.push(data.skippedMessages); }
   if (data.protocolLog) { sets.push('protocol_log = ?'); vals.push(JSON.stringify(data.protocolLog)); }
+  if (data.errorLog) { sets.push('error_log = ?'); vals.push(JSON.stringify(data.errorLog)); }
   if (data.status === 'completed' || data.status === 'failed') {
     sets.push('completed_at = ?'); vals.push(new Date().toISOString());
   }
@@ -336,6 +338,10 @@ export function saveAttachment(att) {
 
 export function getAttachments(messageId) {
   return getDb().prepare('SELECT * FROM attachments WHERE message_id = ?').all(messageId);
+}
+
+export function getProjectAttachments(projectId) {
+  return getDb().prepare('SELECT a.* FROM attachments a JOIN messages m ON a.message_id = m.id WHERE m.project_id = ?').all(projectId);
 }
 
 export function saveDriveLink(link) {
