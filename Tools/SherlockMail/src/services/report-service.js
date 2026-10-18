@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 import { v4 as uuidv4 } from 'uuid';
 
 export class ReportService {
@@ -167,7 +168,6 @@ export class ReportService {
 
     if (files.length === 0) return { compressed: false, reason: 'No log files found' };
 
-    // Build a simple ZIP-like archive (stored, no compression for forensic integrity)
     const parts = [];
     const entries = [];
     let offset = 0;
@@ -176,47 +176,49 @@ export class ReportService {
       const relPath = path.relative(logsDir, filePath);
       const content = fs.readFileSync(filePath);
       const crc = this._crc32(content);
+      const compressed = zlib.deflateRawSync(content, { level: 6 });
 
-      // Local file header
       const nameBytes = Buffer.from(relPath, 'utf8');
-      const header = Buffer.alloc(30 + nameBytes.length);
-      header.writeUInt32LE(0x04034B50, 0); // PK\x03\x04
-      header.writeUInt16LE(20, 4); // version needed
-      header.writeUInt16LE(0, 6); // flags
-      header.writeUInt16LE(0, 8); // stored (no compression)
-      header.writeUInt16LE(0, 10); // mod time
-      header.writeUInt16LE(0, 12); // mod date
-      header.writeUInt32LE(crc, 14);
-      header.writeUInt32LE(content.length, 18); // compressed size
-      header.writeUInt32LE(content.length, 22); // uncompressed size
-      header.writeUInt16LE(nameBytes.length, 26);
-      nameBytes.copy(header, 30);
+      const now = new Date();
+      const dosTime = ((now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1)) & 0xFFFF;
+      const dosDate = (((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()) & 0xFFFF;
 
-      entries.push({ offset, name: nameBytes, crc, size: content.length });
-      parts.push(header, content);
-      offset += header.length + content.length;
+      const header = Buffer.alloc(30);
+      header.writeUInt32LE(0x04034B50, 0);
+      header.writeUInt16LE(20, 4);
+      header.writeUInt16LE(0x0800, 6); // UTF-8 flag
+      header.writeUInt16LE(8, 8); // Deflate
+      header.writeUInt16LE(dosTime, 10);
+      header.writeUInt16LE(dosDate, 12);
+      header.writeUInt32LE(crc, 14);
+      header.writeUInt32LE(compressed.length, 18);
+      header.writeUInt32LE(content.length, 22);
+      header.writeUInt16LE(nameBytes.length, 26);
+
+      entries.push({ offset, name: nameBytes, crc, compressedSize: compressed.length, uncompressedSize: content.length, dosTime, dosDate });
+      parts.push(header, nameBytes, compressed);
+      offset += 30 + nameBytes.length + compressed.length;
     }
 
-    // Central directory
     const cdStart = offset;
     for (const entry of entries) {
-      const cd = Buffer.alloc(46 + entry.name.length);
-      cd.writeUInt32LE(0x02014B50, 0); // PK\x01\x02
-      cd.writeUInt16LE(20, 4); // version made by
-      cd.writeUInt16LE(20, 6); // version needed
-      cd.writeUInt16LE(0, 8); // flags
-      cd.writeUInt16LE(0, 10); // stored
+      const cd = Buffer.alloc(46);
+      cd.writeUInt32LE(0x02014B50, 0);
+      cd.writeUInt16LE(0x033F, 4);
+      cd.writeUInt16LE(20, 6);
+      cd.writeUInt16LE(0x0800, 8);
+      cd.writeUInt16LE(8, 10); // Deflate
+      cd.writeUInt16LE(entry.dosTime, 12);
+      cd.writeUInt16LE(entry.dosDate, 14);
       cd.writeUInt32LE(entry.crc, 16);
-      cd.writeUInt32LE(entry.size, 20);
-      cd.writeUInt32LE(entry.size, 24);
+      cd.writeUInt32LE(entry.compressedSize, 20);
+      cd.writeUInt32LE(entry.uncompressedSize, 24);
       cd.writeUInt16LE(entry.name.length, 28);
       cd.writeUInt32LE(entry.offset, 42);
-      entry.name.copy(cd, 46);
-      parts.push(cd);
-      offset += cd.length;
+      parts.push(Buffer.concat([cd, entry.name]));
+      offset += 46 + entry.name.length;
     }
 
-    // End of central directory
     const eocd = Buffer.alloc(22);
     eocd.writeUInt32LE(0x06054B50, 0);
     eocd.writeUInt16LE(entries.length, 8);
@@ -229,13 +231,16 @@ export class ReportService {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, archive);
 
+    const totalUncompressed = entries.reduce((s, e) => s + e.uncompressedSize, 0);
     return {
       compressed: true,
       outputPath,
       size: archive.length,
       fileCount: files.length,
+      totalUncompressed,
+      compressionRatio: totalUncompressed > 0 ? ((1 - archive.length / totalUncompressed) * 100).toFixed(1) + '%' : '0%',
       hash: crypto.createHash('sha256').update(archive).digest('hex'),
-      format: 'ZIP (stored, no compression)',
+      format: 'ZIP (deflate)',
     };
   }
 

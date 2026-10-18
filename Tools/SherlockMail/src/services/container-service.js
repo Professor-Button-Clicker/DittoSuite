@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 import { v4 as uuidv4 } from 'uuid';
 import { HashManager } from './hash-manager.js';
 
@@ -252,5 +253,116 @@ export class ContainerService {
     const body = msg.body_text || msg.bodyText || '';
     const content = `From: ${from}\r\nSubject: ${subject}\r\nDate: ${msg.date || ''}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}\r\n`;
     return { content, size: Buffer.byteLength(content) };
+  }
+
+  // ── ZIP Container with Deflate Compression (matching FEC's System.IO.Compression + Rebex.Zip) ──
+
+  static createZipContainer(exportDir, outputPath, options = {}) {
+    const compressionLevel = options.compressionLevel ?? 6;
+    const files = this._collectFiles(exportDir);
+    const entries = [];
+    let offset = 0;
+
+    const localHeaders = [];
+    const centralHeaders = [];
+
+    for (const file of files) {
+      const relPath = path.relative(exportDir, file.path).replace(/\\/g, '/');
+      const fileData = fs.readFileSync(file.path);
+      const crc = this._crc32(fileData);
+      const compressed = compressionLevel > 0 ? zlib.deflateRawSync(fileData, { level: compressionLevel }) : fileData;
+      const method = compressionLevel > 0 ? 8 : 0; // 8 = Deflate, 0 = Stored
+
+      const nameBytes = Buffer.from(relPath, 'utf8');
+      const now = new Date();
+      const dosTime = ((now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1)) & 0xFFFF;
+      const dosDate = (((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()) & 0xFFFF;
+
+      // Local file header (30 + name + compressed data)
+      const local = Buffer.alloc(30);
+      local.writeUInt32LE(0x04034B50, 0); // PK\x03\x04
+      local.writeUInt16LE(20, 4); // version needed
+      local.writeUInt16LE(0x0800, 6); // UTF-8 flag
+      local.writeUInt16LE(method, 8);
+      local.writeUInt16LE(dosTime, 10);
+      local.writeUInt16LE(dosDate, 12);
+      local.writeUInt32LE(crc, 14);
+      local.writeUInt32LE(compressed.length, 18); // compressed size
+      local.writeUInt32LE(fileData.length, 22); // uncompressed size
+      local.writeUInt16LE(nameBytes.length, 26);
+
+      const localOffset = offset;
+      localHeaders.push(Buffer.concat([local, nameBytes, compressed]));
+      offset += 30 + nameBytes.length + compressed.length;
+
+      // Central directory header
+      const central = Buffer.alloc(46);
+      central.writeUInt32LE(0x02014B50, 0); // PK\x01\x02
+      central.writeUInt16LE(0x033F, 4); // version made by (Unix, 6.3)
+      central.writeUInt16LE(20, 6);
+      central.writeUInt16LE(0x0800, 8);
+      central.writeUInt16LE(method, 10);
+      central.writeUInt16LE(dosTime, 12);
+      central.writeUInt16LE(dosDate, 14);
+      central.writeUInt32LE(crc, 16);
+      central.writeUInt32LE(compressed.length, 20);
+      central.writeUInt32LE(fileData.length, 24);
+      central.writeUInt16LE(nameBytes.length, 28);
+      central.writeUInt32LE(localOffset, 42); // local header offset
+
+      centralHeaders.push(Buffer.concat([central, nameBytes]));
+
+      entries.push({
+        name: relPath,
+        originalSize: fileData.length,
+        compressedSize: compressed.length,
+        ratio: fileData.length > 0 ? ((1 - compressed.length / fileData.length) * 100).toFixed(1) + '%' : '0%',
+        crc32: crc.toString(16).padStart(8, '0'),
+        method: method === 8 ? 'deflate' : 'stored',
+      });
+    }
+
+    const centralStart = offset;
+    const centralData = Buffer.concat(centralHeaders);
+    const centralSize = centralData.length;
+
+    // End of central directory
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054B50, 0); // PK\x05\x06
+    eocd.writeUInt16LE(entries.length, 8);
+    eocd.writeUInt16LE(entries.length, 10);
+    eocd.writeUInt32LE(centralSize, 12);
+    eocd.writeUInt32LE(centralStart, 16);
+
+    const zipContent = Buffer.concat([...localHeaders, centralData, eocd]);
+
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(outputPath, zipContent);
+
+    const hashes = HashManager.computeAll(zipContent);
+    const totalOriginal = entries.reduce((s, e) => s + e.originalSize, 0);
+    const totalCompressed = entries.reduce((s, e) => s + e.compressedSize, 0);
+
+    return {
+      outputPath,
+      size: zipContent.length,
+      fileCount: entries.length,
+      totalOriginalSize: totalOriginal,
+      totalCompressedSize: totalCompressed,
+      compressionRatio: totalOriginal > 0 ? ((1 - totalCompressed / totalOriginal) * 100).toFixed(1) + '%' : '0%',
+      compressionMethod: compressionLevel > 0 ? 'deflate' : 'stored',
+      hashes,
+      entries,
+      format: 'ZIP',
+    };
+  }
+
+  static _crc32(data) {
+    let crc = 0xFFFFFFFF;
+    for (let i = 0; i < data.length; i++) {
+      crc ^= data[i];
+      for (let j = 0; j < 8; j++) crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
   }
 }

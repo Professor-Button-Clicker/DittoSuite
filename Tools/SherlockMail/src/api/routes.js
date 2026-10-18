@@ -68,6 +68,9 @@ import { ReportService } from '../services/report-service.js';
 import { AdvancedSearchService } from '../services/advanced-search.js';
 import { AutomationService } from '../services/automation-service.js';
 import { CryptoService } from '../services/crypto-service.js';
+import { FileTypeDetector } from '../services/file-detection.js';
+import { MetadataExportService } from '../services/metadata-export.js';
+import { RetryPolicy, CircuitBreaker, RateLimiter, EmailValidator } from '../services/automation-service.js';
 import {
   saveRfc3161Timestamp, getRfc3161Timestamps,
   saveFolderSnapshot, getFolderSnapshots,
@@ -2349,6 +2352,229 @@ router.post('/imap-profiles/import', (req, res) => {
     saveCustomImapProfile(profile);
     res.json({ success: true, profile });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════
+// ── FEC-PARITY UPGRADES: File Detection, Metadata Export,    ──
+// ── Retry/Rate-Limit, Email Validation, AutoDiscover,        ──
+// ── Hash File Ops, Timestamp Verification                    ──
+// ══════════════════════════════════════════════════════════════
+
+// ── File Type Detection (matching FEC's FileTypeDetector) ──
+router.post('/detect/file', (req, res) => {
+  try {
+    const { filePath } = req.body;
+    if (!filePath) return res.status(400).json({ error: 'filePath required' });
+    res.json(FileTypeDetector.detect(filePath));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/detect/buffer', (req, res) => {
+  try {
+    const { data, filename } = req.body;
+    if (!data) return res.status(400).json({ error: 'data (base64) required' });
+    const buf = Buffer.from(data, 'base64');
+    res.json(FileTypeDetector.detectBuffer(buf, filename));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/detect/classify', (req, res) => {
+  try {
+    const { filename, data } = req.body;
+    if (!filename) return res.status(400).json({ error: 'filename required' });
+    const buf = data ? Buffer.from(data, 'base64') : null;
+    res.json(FileTypeDetector.classifyAttachment(filename, buf));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Metadata Export (matching FEC's 12 MetadataExportMap types) ──
+router.get('/metadata-export/types', (req, res) => {
+  res.json(MetadataExportService.getAvailableExportTypes());
+});
+
+router.post('/projects/:id/metadata-export', (req, res) => {
+  try {
+    const { type, format } = req.body;
+    if (!type) return res.status(400).json({ error: 'type required (email, attachment, calendar, contact, document, drive, audit, hash, timestamp, snapshot)' });
+
+    let data;
+    switch (type) {
+      case 'email': data = getAllProjectMessages(req.params.id); break;
+      case 'attachment': data = getProjectAttachments(req.params.id); break;
+      case 'calendar': data = getCalendarEvents(req.params.id); break;
+      case 'contact': data = getContacts(req.params.id); break;
+      case 'drive': data = getDriveItems(req.params.id); break;
+      case 'audit': data = getFullAuditLog(req.params.id); break;
+      case 'timestamp': data = getRfc3161Timestamps(req.params.id); break;
+      case 'snapshot': data = getFolderSnapshots(req.params.id); break;
+      default: data = [];
+    }
+
+    const csv = MetadataExportService.exportToString(data, type, format || 'csv');
+    const ext = (format === 'tsv') ? 'tsv' : 'csv';
+    res.setHeader('Content-Type', format === 'tsv' ? 'text/tab-separated-values' : 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="${type}_export.${ext}"`);
+    res.send(csv);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/projects/:id/metadata-export/file', (req, res) => {
+  try {
+    const { type, format, outputPath } = req.body;
+    if (!type || !outputPath) return res.status(400).json({ error: 'type and outputPath required' });
+
+    let data;
+    switch (type) {
+      case 'email': data = getAllProjectMessages(req.params.id); break;
+      case 'attachment': data = getProjectAttachments(req.params.id); break;
+      case 'calendar': data = getCalendarEvents(req.params.id); break;
+      case 'contact': data = getContacts(req.params.id); break;
+      case 'drive': data = getDriveItems(req.params.id); break;
+      case 'audit': data = getFullAuditLog(req.params.id); break;
+      case 'timestamp': data = getRfc3161Timestamps(req.params.id); break;
+      case 'snapshot': data = getFolderSnapshots(req.params.id); break;
+      default: data = [];
+    }
+
+    const result = MetadataExportService.exportToFile(data, type, outputPath, format || 'csv');
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/metadata-export/columns/:type', (req, res) => {
+  const columns = MetadataExportService.getColumns(req.params.type);
+  if (!columns) return res.status(404).json({ error: 'Unknown type' });
+  res.json({ type: req.params.type, columns });
+});
+
+// ── File Hashing (new endpoints for upgraded hash-manager) ──
+router.post('/hash/file', (req, res) => {
+  try {
+    const { filePath, algorithms } = req.body;
+    if (!filePath) return res.status(400).json({ error: 'filePath required' });
+    res.json(HashManager.computeFileSync(filePath, algorithms));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/hash/file/streaming', async (req, res) => {
+  try {
+    const { filePath, algorithms } = req.body;
+    if (!filePath) return res.status(400).json({ error: 'filePath required' });
+    const result = await HashManager.computeFileStreaming(filePath, algorithms);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/hash/verify-file', (req, res) => {
+  try {
+    const { filePath, expectedHashes } = req.body;
+    if (!filePath || !expectedHashes) return res.status(400).json({ error: 'filePath and expectedHashes required' });
+    res.json(HashManager.verifyFile(filePath, expectedHashes));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/hash/directory-manifest', (req, res) => {
+  try {
+    const { dirPath, algorithms } = req.body;
+    if (!dirPath) return res.status(400).json({ error: 'dirPath required' });
+    res.json(HashManager.computeDirectoryManifest(dirPath, algorithms));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/hash/mime', (req, res) => {
+  try {
+    const { messageId, mimeData, emlData } = req.body;
+    if (!messageId || !mimeData) return res.status(400).json({ error: 'messageId and mimeData required' });
+    const mime = Buffer.from(mimeData, 'base64');
+    const eml = emlData ? Buffer.from(emlData, 'base64') : null;
+    res.json(HashManager.createMimeHashResult(messageId, mime, eml));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/hash/drive', (req, res) => {
+  try {
+    const { itemId, fileData, metadata } = req.body;
+    if (!itemId || !fileData) return res.status(400).json({ error: 'itemId and fileData required' });
+    res.json(HashManager.createDriveHashResult(itemId, Buffer.from(fileData, 'base64'), metadata));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/hash/attachment', (req, res) => {
+  try {
+    const { attachmentId, data, parentMessageId } = req.body;
+    if (!attachmentId || !data) return res.status(400).json({ error: 'attachmentId and data required' });
+    res.json(HashManager.createAttachmentHashResult(attachmentId, Buffer.from(data, 'base64'), parentMessageId));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── RFC 3161 Timestamp Verification (new endpoints) ──
+router.post('/projects/:id/rfc3161/verify', async (req, res) => {
+  try {
+    const { timestampToken, originalHash, tsaUrl } = req.body;
+    if (!timestampToken) return res.status(400).json({ error: 'timestampToken (base64) required' });
+    const result = await Rfc3161TimestampService.verifyTimestamp(timestampToken, originalHash, { tsaUrl });
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/projects/:id/rfc3161/verify-chain', async (req, res) => {
+  try {
+    const timestamps = getRfc3161Timestamps(req.params.id);
+    if (!timestamps.length) return res.json({ totalTimestamps: 0, allValid: true, chronologicalOrder: true, results: [] });
+    const result = await Rfc3161TimestampService.verifyTimestampChain(timestamps);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Email Validation (matching FEC's EmailValidation) ──
+router.post('/validate/email', (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'email required' });
+    res.json(EmailValidator.validate(email));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/validate/email/mx', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'email required' });
+    res.json(await EmailValidator.validateMx(email));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Exchange AutoDiscover (matching FEC's ExchangeAutoDiscover) ──
+router.post('/exchange/autodiscover', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'email required' });
+    res.json(await AutomationService.exchangeAutoDiscover(email));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Session/Output Naming (matching FEC's SessionNameCreator) ──
+router.post('/session/name', (req, res) => {
+  try {
+    const { projectName, targetEmail, counter } = req.body;
+    res.json({ sessionName: AutomationService.createSessionName(projectName, targetEmail, { counter }) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/session/output-folder', (req, res) => {
+  try {
+    const { baseDir, projectName, targetEmail, counter } = req.body;
+    if (!baseDir) return res.status(400).json({ error: 'baseDir required' });
+    res.json(AutomationService.createOutputFolder(baseDir, projectName, targetEmail, { counter }));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Retry Policy & Rate Limiter Status ──
+router.get('/resilience/info', (req, res) => {
+  res.json({
+    retryPolicy: { description: 'Exponential backoff with jitter', maxRetries: 3, retryableErrors: ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'EHOSTUNREACH', 'EAI_AGAIN'], retryableStatusCodes: [408, 429, 500, 502, 503, 504] },
+    circuitBreaker: { description: 'Trips after consecutive failures, auto-resets', states: ['closed', 'open', 'half-open'], failureThreshold: 5, resetTimeoutMs: 60000 },
+    rateLimiter: { description: 'Token-bucket rate limiting', defaultMaxRequests: 30, defaultWindowMs: 60000 },
+  });
 });
 
 // ══════════════════════════════════════════════════════════════

@@ -5,6 +5,181 @@ import dns from 'dns';
 import net from 'net';
 import tls from 'tls';
 import os from 'os';
+import https from 'https';
+import http from 'http';
+
+export class RetryPolicy {
+  constructor(options = {}) {
+    this.maxRetries = options.maxRetries ?? 3;
+    this.baseDelayMs = options.baseDelayMs ?? 1000;
+    this.maxDelayMs = options.maxDelayMs ?? 30000;
+    this.backoffMultiplier = options.backoffMultiplier ?? 2;
+    this.jitterFactor = options.jitterFactor ?? 0.1;
+    this.retryableErrors = options.retryableErrors || ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE', 'EHOSTUNREACH', 'EAI_AGAIN'];
+    this.retryableStatusCodes = options.retryableStatusCodes || [408, 429, 500, 502, 503, 504];
+  }
+
+  async execute(fn) {
+    let lastError;
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      try {
+        return await fn(attempt);
+      } catch (err) {
+        lastError = err;
+        if (attempt === this.maxRetries) break;
+        if (!this._isRetryable(err)) break;
+        const delay = this._computeDelay(attempt);
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+    throw lastError;
+  }
+
+  _isRetryable(err) {
+    if (this.retryableErrors.includes(err.code)) return true;
+    if (err.statusCode && this.retryableStatusCodes.includes(err.statusCode)) return true;
+    if (err.message?.includes('throttl') || err.message?.includes('rate limit')) return true;
+    return false;
+  }
+
+  _computeDelay(attempt) {
+    let delay = this.baseDelayMs * Math.pow(this.backoffMultiplier, attempt);
+    delay = Math.min(delay, this.maxDelayMs);
+    const jitter = delay * this.jitterFactor * (Math.random() * 2 - 1);
+    return Math.max(0, Math.round(delay + jitter));
+  }
+}
+
+export class CircuitBreaker {
+  constructor(options = {}) {
+    this.failureThreshold = options.failureThreshold ?? 5;
+    this.resetTimeoutMs = options.resetTimeoutMs ?? 60000;
+    this.halfOpenMax = options.halfOpenMax ?? 1;
+    this.state = 'closed';
+    this.failures = 0;
+    this.lastFailure = 0;
+    this.successes = 0;
+  }
+
+  async execute(fn) {
+    if (this.state === 'open') {
+      if (Date.now() - this.lastFailure >= this.resetTimeoutMs) {
+        this.state = 'half-open';
+        this.successes = 0;
+      } else {
+        throw new Error('Circuit breaker is OPEN — service unavailable');
+      }
+    }
+
+    try {
+      const result = await fn();
+      this._onSuccess();
+      return result;
+    } catch (err) {
+      this._onFailure();
+      throw err;
+    }
+  }
+
+  _onSuccess() {
+    if (this.state === 'half-open') {
+      this.successes++;
+      if (this.successes >= this.halfOpenMax) {
+        this.state = 'closed';
+        this.failures = 0;
+      }
+    } else {
+      this.failures = Math.max(0, this.failures - 1);
+    }
+  }
+
+  _onFailure() {
+    this.failures++;
+    this.lastFailure = Date.now();
+    if (this.failures >= this.failureThreshold) this.state = 'open';
+  }
+
+  getState() {
+    if (this.state === 'open' && Date.now() - this.lastFailure >= this.resetTimeoutMs) return 'half-open';
+    return this.state;
+  }
+}
+
+export class RateLimiter {
+  constructor(options = {}) {
+    this.maxRequests = options.maxRequests ?? 30;
+    this.windowMs = options.windowMs ?? 60000;
+    this.tokens = this.maxRequests;
+    this.lastRefill = Date.now();
+  }
+
+  async acquire() {
+    this._refill();
+    if (this.tokens <= 0) {
+      const waitMs = this.windowMs - (Date.now() - this.lastRefill);
+      await new Promise(r => setTimeout(r, Math.max(waitMs, 100)));
+      this._refill();
+    }
+    if (this.tokens <= 0) throw new Error('Rate limit exceeded');
+    this.tokens--;
+  }
+
+  _refill() {
+    const now = Date.now();
+    const elapsed = now - this.lastRefill;
+    if (elapsed >= this.windowMs) {
+      this.tokens = this.maxRequests;
+      this.lastRefill = now;
+    } else {
+      const refill = Math.floor((elapsed / this.windowMs) * this.maxRequests);
+      this.tokens = Math.min(this.maxRequests, this.tokens + refill);
+    }
+  }
+
+  getStatus() {
+    this._refill();
+    return { remainingTokens: this.tokens, maxRequests: this.maxRequests, windowMs: this.windowMs };
+  }
+}
+
+export class EmailValidator {
+  static EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+
+  static validate(email) {
+    const result = { email, valid: false, errors: [] };
+    if (!email || typeof email !== 'string') { result.errors.push('Email is required'); return result; }
+    const trimmed = email.trim().toLowerCase();
+    if (trimmed.length > 254) { result.errors.push('Email exceeds 254 characters'); return result; }
+    if (!this.EMAIL_REGEX.test(trimmed)) { result.errors.push('Invalid email format'); return result; }
+    const [local, domain] = trimmed.split('@');
+    if (local.length > 64) { result.errors.push('Local part exceeds 64 characters'); return result; }
+    if (!domain || !domain.includes('.')) { result.errors.push('Domain must contain a dot'); return result; }
+    const tld = domain.split('.').pop();
+    if (tld.length < 2) { result.errors.push('TLD too short'); return result; }
+    result.valid = true;
+    result.normalized = trimmed;
+    result.local = local;
+    result.domain = domain;
+    return result;
+  }
+
+  static async validateMx(email) {
+    const basic = this.validate(email);
+    if (!basic.valid) return basic;
+    try {
+      const mx = await new Promise((resolve, reject) => {
+        dns.resolveMx(basic.domain, (err, records) => err ? reject(err) : resolve(records));
+      });
+      basic.mxRecords = mx.sort((a, b) => a.priority - b.priority).map(r => r.exchange);
+      basic.hasMx = mx.length > 0;
+    } catch {
+      basic.hasMx = false;
+      basic.errors.push('No MX records found');
+      basic.valid = false;
+    }
+    return basic;
+  }
+}
 
 export class AutomationService {
 
@@ -452,5 +627,103 @@ export class AutomationService {
     }
 
     return profile;
+  }
+
+  // ── Exchange AutoDiscover ──
+
+  static async exchangeAutoDiscover(email) {
+    const domain = email.split('@')[1];
+    if (!domain) throw new Error('Invalid email');
+
+    const urls = [
+      `https://${domain}/autodiscover/autodiscover.xml`,
+      `https://autodiscover.${domain}/autodiscover/autodiscover.xml`,
+      `http://autodiscover.${domain}/autodiscover/autodiscover.xml`,
+    ];
+
+    const autoDiscoverXml = `<?xml version="1.0" encoding="utf-8"?><Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/requestschema/2006"><Request><EMailAddress>${email}</EMailAddress><AcceptableResponseSchema>http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a</AcceptableResponseSchema></Request></Autodiscover>`;
+
+    for (const url of urls) {
+      try {
+        const body = await this._httpPost(url, autoDiscoverXml, { 'Content-Type': 'text/xml' }, 10000);
+        const ewsMatch = body.match(/<EwsUrl>(.*?)<\/EwsUrl>/);
+        const oabMatch = body.match(/<OABUrl>(.*?)<\/OABUrl>/);
+        const asMatch = body.match(/<ASUrl>(.*?)<\/ASUrl>/);
+        const serverMatch = body.match(/<Server>(.*?)<\/Server>/);
+
+        if (ewsMatch || serverMatch) {
+          return {
+            email, domain,
+            discovered: true,
+            ewsUrl: ewsMatch?.[1] || null,
+            oabUrl: oabMatch?.[1] || null,
+            activeSyncUrl: asMatch?.[1] || null,
+            server: serverMatch?.[1] || null,
+            discoveredFrom: url,
+          };
+        }
+      } catch {}
+    }
+
+    // SRV record fallback
+    try {
+      const srv = await new Promise((resolve, reject) => {
+        dns.resolveSrv(`_autodiscover._tcp.${domain}`, (err, records) => err ? reject(err) : resolve(records));
+      });
+      if (srv.length > 0) {
+        return {
+          email, domain, discovered: true,
+          server: srv[0].name,
+          port: srv[0].port,
+          discoveredFrom: 'SRV',
+        };
+      }
+    } catch {}
+
+    return { email, domain, discovered: false };
+  }
+
+  static _httpPost(url, body, headers = {}, timeout = 10000) {
+    return new Promise((resolve, reject) => {
+      const parsed = new URL(url);
+      const transport = parsed.protocol === 'https:' ? https : http;
+      const req = transport.request({
+        hostname: parsed.hostname, port: parsed.port, path: parsed.pathname,
+        method: 'POST', headers: { ...headers, 'Content-Length': Buffer.byteLength(body) },
+        timeout, rejectUnauthorized: false,
+      }, (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 400) resolve(Buffer.concat(chunks).toString());
+          else reject(new Error(`HTTP ${res.statusCode}`));
+        });
+      });
+      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+      req.write(body);
+      req.end();
+    });
+  }
+
+  // ── Session/Output Naming (matching FEC's SessionNameCreator) ──
+
+  static createSessionName(projectName, targetEmail, options = {}) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const sanitized = (projectName || 'SherlockMail').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
+    const emailPart = targetEmail ? targetEmail.split('@')[0].replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 30) : '';
+    const counter = options.counter ? `_${String(options.counter).padStart(3, '0')}` : '';
+    return `${sanitized}_${emailPart}_${timestamp}${counter}`;
+  }
+
+  static createOutputFolder(baseDir, projectName, targetEmail, options = {}) {
+    const sessionName = this.createSessionName(projectName, targetEmail, options);
+    const outputPath = `${baseDir}/${sessionName}`;
+    fs.mkdirSync(outputPath, { recursive: true });
+
+    const subfolders = ['eml', 'attachments', 'metadata', 'logs', 'reports', 'containers'];
+    for (const sub of subfolders) fs.mkdirSync(`${outputPath}/${sub}`, { recursive: true });
+
+    return { sessionName, outputPath, subfolders: subfolders.map(s => `${outputPath}/${s}`) };
   }
 }

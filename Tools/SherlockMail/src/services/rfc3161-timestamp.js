@@ -236,13 +236,103 @@ export class Rfc3161TimestampService {
     });
   }
 
+  static async verifyTimestamp(timestampToken, originalHash, options = {}) {
+    const result = {
+      valid: false,
+      genTime: null,
+      tsaName: null,
+      hashAlgorithm: null,
+      hashMatch: false,
+      serialNumber: null,
+      certificateInfo: null,
+      errors: [],
+    };
+
+    try {
+      const tokenBuf = Buffer.isBuffer(timestampToken) ? timestampToken : Buffer.from(timestampToken, 'base64');
+      const parsed = this._parseTimestampResponse(tokenBuf);
+
+      result.genTime = parsed.genTime;
+      result.serialNumber = parsed.serialNumber;
+
+      if (parsed.status === 0) {
+        result.valid = true;
+
+        if (originalHash && parsed.tstInfo) {
+          const tstHex = parsed.tstInfo.toString('hex');
+          result.hashMatch = tstHex.includes(originalHash.toLowerCase());
+        } else if (originalHash) {
+          const tokenHex = tokenBuf.toString('hex');
+          result.hashMatch = tokenHex.includes(originalHash.toLowerCase());
+        }
+
+        if (!result.hashMatch && originalHash) {
+          result.errors.push('Hash in timestamp token does not match the provided original hash');
+          result.valid = false;
+        }
+      } else {
+        result.errors.push(`Timestamp response status: ${parsed.status} (expected 0)`);
+      }
+
+      if (options.tsaUrl) {
+        result.tsaName = DEFAULT_TSAS.find(t => t.url === options.tsaUrl)?.name || new URL(options.tsaUrl).hostname;
+      }
+    } catch (err) {
+      result.errors.push(err.message);
+    }
+
+    return result;
+  }
+
+  static async verifyTimestampChain(timestamps) {
+    const results = [];
+    let allValid = true;
+
+    for (const ts of timestamps) {
+      const verification = await this.verifyTimestamp(
+        ts.timestampToken || ts.timestamp_token,
+        ts.targetHash || ts.target_hash,
+        { tsaUrl: ts.tsaUrl || ts.tsa_url }
+      );
+
+      if (!verification.valid) allValid = false;
+
+      results.push({
+        id: ts.id,
+        targetType: ts.targetType || ts.target_type,
+        genTime: verification.genTime,
+        valid: verification.valid,
+        hashMatch: verification.hashMatch,
+        errors: verification.errors,
+      });
+    }
+
+    let chronological = true;
+    for (let i = 1; i < results.length; i++) {
+      if (results[i].genTime && results[i - 1].genTime) {
+        if (new Date(results[i].genTime) < new Date(results[i - 1].genTime)) {
+          chronological = false;
+          break;
+        }
+      }
+    }
+
+    return {
+      totalTimestamps: timestamps.length,
+      allValid,
+      chronologicalOrder: chronological,
+      results,
+    };
+  }
+
   static getInfo() {
     return {
       standard: 'RFC 3161 — Internet X.509 PKI Time-Stamp Protocol (TSP)',
-      description: 'Requests cryptographic timestamps from external Timestamp Authorities (TSAs) to prove that data existed at a specific point in time with independent third-party attestation.',
+      description: 'Requests and verifies cryptographic timestamps from external Timestamp Authorities (TSAs) to prove that data existed at a specific point in time with independent third-party attestation.',
       availableTSAs: DEFAULT_TSAS,
+      capabilities: ['request', 'verify', 'chain-validation', 'collection-timestamp', 'export-timestamp'],
       forensicValue: 'RFC 3161 timestamps from qualified TSAs provide legally binding proof of time, suitable for court proceedings under FRE 901(b)(9) / FRE 902(14) and eIDAS.',
-      relatedStandards: ['RFC 3161', 'ETSI EN 319 421', 'ETSI EN 319 422', 'ISO/IEC 27037:2012'],
+      relatedStandards: ['RFC 3161', 'RFC 5816', 'ETSI EN 319 421', 'ETSI EN 319 422', 'ISO/IEC 27037:2012'],
     };
   }
 }

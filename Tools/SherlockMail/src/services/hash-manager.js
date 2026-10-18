@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import fs from 'fs';
 
 export class HashManager {
 
@@ -10,6 +11,7 @@ export class HashManager {
     for (const alg of this.ALGORITHMS) {
       results[alg] = crypto.createHash(alg).update(buf).digest('hex');
     }
+    results.byteLength = buf.length;
     return results;
   }
 
@@ -20,43 +22,92 @@ export class HashManager {
       if (!this.ALGORITHMS.includes(alg)) throw new Error(`Unsupported algorithm: ${alg}`);
       results[alg] = crypto.createHash(alg).update(buf).digest('hex');
     }
+    results.byteLength = buf.length;
     return results;
   }
 
   static computeStreaming(algorithms = this.ALGORITHMS) {
     const hashers = {};
-    for (const alg of algorithms) {
-      hashers[alg] = crypto.createHash(alg);
-    }
+    for (const alg of algorithms) hashers[alg] = crypto.createHash(alg);
+    let totalBytes = 0;
     return {
       update(chunk) {
         const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+        totalBytes += buf.length;
         for (const h of Object.values(hashers)) h.update(buf);
         return this;
       },
       digest() {
         const results = {};
         for (const [alg, h] of Object.entries(hashers)) results[alg] = h.digest('hex');
+        results.byteLength = totalBytes;
         return results;
       },
     };
+  }
+
+  static computeFileSync(filePath, algorithms = this.ALGORITHMS) {
+    const data = fs.readFileSync(filePath);
+    const results = {};
+    for (const alg of algorithms) {
+      results[alg] = crypto.createHash(alg).update(data).digest('hex');
+    }
+    results.byteLength = data.length;
+    results.filePath = filePath;
+    return results;
+  }
+
+  static async computeFileStreaming(filePath, algorithms = this.ALGORITHMS) {
+    return new Promise((resolve, reject) => {
+      const hashers = {};
+      for (const alg of algorithms) hashers[alg] = crypto.createHash(alg);
+      let totalBytes = 0;
+      const stream = fs.createReadStream(filePath, { highWaterMark: 1024 * 1024 });
+      stream.on('data', chunk => {
+        totalBytes += chunk.length;
+        for (const h of Object.values(hashers)) h.update(chunk);
+      });
+      stream.on('end', () => {
+        const results = {};
+        for (const [alg, h] of Object.entries(hashers)) results[alg] = h.digest('hex');
+        results.byteLength = totalBytes;
+        results.filePath = filePath;
+        resolve(results);
+      });
+      stream.on('error', reject);
+    });
   }
 
   static verify(data, expectedHashes) {
     const computed = this.computeAll(data);
     const results = [];
     for (const [alg, expected] of Object.entries(expectedHashes)) {
-      if (!expected) continue;
+      if (!expected || alg === 'byteLength') continue;
       const actual = computed[alg];
-      results.push({
-        algorithm: alg,
-        expected,
-        computed: actual,
-        match: actual === expected,
-      });
+      results.push({ algorithm: alg, expected, computed: actual, match: actual === expected });
     }
     return {
       allMatch: results.every(r => r.match),
+      verified: results.filter(r => r.match).length,
+      failed: results.filter(r => !r.match).length,
+      algorithms: results,
+    };
+  }
+
+  static verifyFile(filePath, expectedHashes) {
+    const computed = this.computeFileSync(filePath);
+    const results = [];
+    for (const [alg, expected] of Object.entries(expectedHashes)) {
+      if (!expected || alg === 'byteLength' || alg === 'filePath') continue;
+      const actual = computed[alg];
+      results.push({ algorithm: alg, expected, computed: actual, match: actual === expected });
+    }
+    return {
+      filePath,
+      allMatch: results.every(r => r.match),
+      verified: results.filter(r => r.match).length,
+      failed: results.filter(r => !r.match).length,
+      byteLength: computed.byteLength,
       algorithms: results,
     };
   }
@@ -67,6 +118,43 @@ export class HashManager {
       .filter(Boolean)
       .sort();
     return crypto.createHash(algorithm).update(hashes.join('|')).digest('hex');
+  }
+
+  static computeDirectoryManifest(dirPath, algorithms = this.ALGORITHMS) {
+    const manifest = { files: [], totalBytes: 0, totalFiles: 0 };
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) walk(full);
+        else {
+          const hashes = this.computeFileSync(full, algorithms);
+          const relPath = full.slice(dirPath.length + 1).replace(/\\/g, '/');
+          manifest.files.push({ path: relPath, ...hashes });
+          manifest.totalBytes += hashes.byteLength;
+          manifest.totalFiles++;
+        }
+      }
+    };
+    if (fs.existsSync(dirPath)) walk(dirPath);
+    manifest.manifestHash = crypto.createHash('sha256')
+      .update(manifest.files.map(f => `${f.path}:${f.sha256}`).sort().join('\n'))
+      .digest('hex');
+    return manifest;
+  }
+
+  static createMimeHashResult(messageId, mimeData, eml = null) {
+    const mimeHashes = this.computeAll(mimeData);
+    const result = { type: 'mime', messageId, mime: mimeHashes };
+    if (eml) result.eml = this.computeAll(eml);
+    return result;
+  }
+
+  static createDriveHashResult(itemId, fileData, metadata = {}) {
+    return { type: 'drive', itemId, file: this.computeAll(fileData), ...metadata };
+  }
+
+  static createAttachmentHashResult(attachmentId, data, parentMessageId) {
+    return { type: 'attachment', attachmentId, parentMessageId, ...this.computeAll(data) };
   }
 
   static getAlgorithmInfo() {
