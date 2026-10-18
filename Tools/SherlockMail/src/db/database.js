@@ -35,6 +35,16 @@ function migrate() {
     if (!cols(table).has(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
   };
   addCol('acquisitions', 'folders_json', 'TEXT');
+  addCol('messages', 'hash_sha1', 'TEXT');
+  addCol('messages', 'hash_sha384', 'TEXT');
+  addCol('attachments', 'hash_sha1', 'TEXT');
+  addCol('attachments', 'hash_sha384', 'TEXT');
+  addCol('projects', 'proxy_config', 'TEXT');
+  addCol('projects', 'notification_config', 'TEXT');
+  addCol('acquisitions', 'health_events_json', 'TEXT');
+  addCol('acquisitions', 'pre_search_id', 'TEXT');
+  addCol('acquisitions', 'is_differential', 'INTEGER DEFAULT 0');
+  addCol('acquisitions', 'source_acquisition_id', 'TEXT');
 }
 
 function rowToObj(row, columns) {
@@ -429,4 +439,358 @@ export function getStats() {
     auditEntries: d.prepare('SELECT COUNT(*) as count FROM audit_log').get().count,
     totalBytes,
   };
+}
+
+// ── RFC 3161 Timestamps ──
+export function saveRfc3161Timestamp(record) {
+  const d = getDb();
+  d.prepare(`INSERT INTO rfc3161_timestamps (id, project_id, target_type, target_hash, tsa_url, tsa_name, request_nonce, tst_info, timestamp_token, gen_time, serial_number, hash_algorithm, status, verification_result, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    record.id, record.projectId, record.targetType, record.targetHash, record.tsaUrl,
+    record.tsaName || null, record.requestNonce || null, record.tstInfo || null,
+    record.timestampToken || null, record.genTime || null, record.serialNumber || null,
+    record.hashAlgorithm || 'sha256', record.status || 'pending', record.verificationResult || null,
+    new Date().toISOString()
+  );
+}
+
+export function getRfc3161Timestamps(projectId) {
+  return getDb().prepare('SELECT * FROM rfc3161_timestamps WHERE project_id = ? ORDER BY created_at DESC').all(projectId);
+}
+
+// ── Folder Snapshots ──
+export function saveFolderSnapshot(record) {
+  const d = getDb();
+  d.prepare(`INSERT INTO folder_snapshots (id, project_id, acquisition_id, snapshot_type, captured_at, folder_data, total_folders, total_messages, hash_sha256)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    record.id, record.projectId, record.acquisitionId || null, record.snapshotType,
+    new Date().toISOString(), JSON.stringify(record.folderData), record.totalFolders || 0,
+    record.totalMessages || 0, record.hashSha256 || null
+  );
+}
+
+export function getFolderSnapshots(projectId) {
+  return getDb().prepare('SELECT * FROM folder_snapshots WHERE project_id = ? ORDER BY captured_at DESC').all(projectId);
+}
+
+// ── Drive Items ──
+export function saveDriveItem(item) {
+  const d = getDb();
+  d.prepare(`INSERT OR REPLACE INTO drive_items (id, project_id, provider, item_type, name, mime_type, size, remote_id, parent_id, path, web_url, created_time, modified_time, owner, shared, revision_count, local_path, hash_md5, hash_sha256, status, downloaded_at, metadata_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    item.id, item.projectId, item.provider, item.itemType, item.name, item.mimeType || null,
+    item.size || 0, item.remoteId || null, item.parentId || null, item.path || null,
+    item.webUrl || null, item.createdTime || null, item.modifiedTime || null,
+    item.owner || null, item.shared ? 1 : 0, item.revisionCount || 0,
+    item.localPath || null, item.hashMd5 || null, item.hashSha256 || null,
+    item.status || 'listed', item.downloadedAt || null, JSON.stringify(item.metadata || {})
+  );
+}
+
+export function getDriveItems(projectId, provider) {
+  if (provider) return getDb().prepare('SELECT * FROM drive_items WHERE project_id = ? AND provider = ? ORDER BY path').all(projectId, provider);
+  return getDb().prepare('SELECT * FROM drive_items WHERE project_id = ? ORDER BY path').all(projectId);
+}
+
+export function updateDriveItem(id, data) {
+  const d = getDb();
+  const sets = [];
+  const vals = [];
+  for (const [k, v] of Object.entries(data)) {
+    const col = k.replace(/([A-Z])/g, '_$1').toLowerCase();
+    sets.push(`${col} = ?`);
+    vals.push(v);
+  }
+  if (sets.length) { vals.push(id); d.prepare(`UPDATE drive_items SET ${sets.join(', ')} WHERE id = ?`).run(...vals); }
+}
+
+// ── Calendar Events ──
+export function saveCalendarEvent(evt) {
+  const d = getDb();
+  d.prepare(`INSERT OR REPLACE INTO calendar_events (id, project_id, provider, event_id, summary, description, location, start_time, end_time, organizer, attendees_json, recurrence, status, ical_data, hash_sha256, collected_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    evt.id, evt.projectId, evt.provider, evt.eventId || null, evt.summary || null,
+    evt.description || null, evt.location || null, evt.startTime || null, evt.endTime || null,
+    evt.organizer || null, JSON.stringify(evt.attendees || []), evt.recurrence || null,
+    evt.status || null, evt.icalData || null, evt.hashSha256 || null, new Date().toISOString()
+  );
+}
+
+export function getCalendarEvents(projectId) {
+  return getDb().prepare('SELECT * FROM calendar_events WHERE project_id = ? ORDER BY start_time DESC').all(projectId);
+}
+
+// ── Contacts ──
+export function saveContact(contact) {
+  const d = getDb();
+  d.prepare(`INSERT OR REPLACE INTO contacts (id, project_id, provider, contact_id, display_name, email_addresses, phone_numbers, organization, title, notes, vcard_data, hash_sha256, collected_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    contact.id, contact.projectId, contact.provider, contact.contactId || null,
+    contact.displayName || null, JSON.stringify(contact.emailAddresses || []),
+    JSON.stringify(contact.phoneNumbers || []), contact.organization || null,
+    contact.title || null, contact.notes || null, contact.vcardData || null,
+    contact.hashSha256 || null, new Date().toISOString()
+  );
+}
+
+export function getContacts(projectId) {
+  return getDb().prepare('SELECT * FROM contacts WHERE project_id = ? ORDER BY display_name').all(projectId);
+}
+
+// ── Cloud Downloads ──
+export function saveCloudDownload(dl) {
+  const d = getDb();
+  d.prepare(`INSERT OR REPLACE INTO cloud_downloads (id, project_id, drive_link_id, provider, remote_url, file_name, file_size, mime_type, stage, local_path, hash_md5, hash_sha1, hash_sha256, hash_sha384, error, started_at, completed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    dl.id, dl.projectId, dl.driveLinkId || null, dl.provider, dl.remoteUrl || null,
+    dl.fileName || null, dl.fileSize || null, dl.mimeType || null, dl.stage || 'queued',
+    dl.localPath || null, dl.hashMd5 || null, dl.hashSha1 || null,
+    dl.hashSha256 || null, dl.hashSha384 || null, dl.error || null,
+    dl.startedAt || null, dl.completedAt || null
+  );
+}
+
+export function getCloudDownloads(projectId) {
+  return getDb().prepare('SELECT * FROM cloud_downloads WHERE project_id = ? ORDER BY started_at DESC').all(projectId);
+}
+
+export function updateCloudDownload(id, data) {
+  const d = getDb();
+  const sets = [];
+  const vals = [];
+  for (const [k, v] of Object.entries(data)) {
+    const col = k.replace(/([A-Z])/g, '_$1').toLowerCase();
+    sets.push(`${col} = ?`);
+    vals.push(v);
+  }
+  if (sets.length) { vals.push(id); d.prepare(`UPDATE cloud_downloads SET ${sets.join(', ')} WHERE id = ?`).run(...vals); }
+}
+
+// ── Pre-Acquisition Search ──
+export function savePreAcquisitionSearch(record) {
+  const d = getDb();
+  d.prepare(`INSERT INTO pre_acquisition_searches (id, project_id, criteria_json, protocol, result_count, selected_count, uids_json, executed_at, applied)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    record.id, record.projectId, JSON.stringify(record.criteria), record.protocol || null,
+    record.resultCount || 0, record.selectedCount || 0, JSON.stringify(record.uids || []),
+    new Date().toISOString(), record.applied ? 1 : 0
+  );
+}
+
+export function getPreAcquisitionSearches(projectId) {
+  return getDb().prepare('SELECT * FROM pre_acquisition_searches WHERE project_id = ? ORDER BY executed_at DESC').all(projectId);
+}
+
+// ── Search Index (Lucene-style) ──
+export function indexMessage(projectId, messageId, fields) {
+  const d = getDb();
+  const stmt = d.prepare('INSERT INTO search_index (project_id, message_id, field, content) VALUES (?, ?, ?, ?)');
+  for (const [field, content] of Object.entries(fields)) {
+    if (content) stmt.run(projectId, messageId, field, String(content).toLowerCase());
+  }
+}
+
+export function searchIndex(projectId, query, fields) {
+  const d = getDb();
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return [];
+  let sql = 'SELECT DISTINCT message_id FROM search_index WHERE project_id = ?';
+  const params = [projectId];
+  if (fields && fields.length) {
+    sql += ` AND field IN (${fields.map(() => '?').join(',')})`;
+    params.push(...fields);
+  }
+  for (const term of terms) {
+    sql += ' AND content LIKE ?';
+    params.push(`%${term}%`);
+  }
+  return d.prepare(sql).all(...params).map(r => r.message_id);
+}
+
+// ── SMTP Settings ──
+export function saveSmtpSettings(settings) {
+  const d = getDb();
+  d.prepare(`INSERT OR REPLACE INTO smtp_settings (id, project_id, host, port, secure, username, password_encrypted, from_address, to_addresses, notify_on_complete, notify_on_error, notify_on_export, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    settings.id, settings.projectId || null, settings.host, settings.port || 587,
+    settings.secure ? 1 : 0, settings.username || null, settings.passwordEncrypted || null,
+    settings.fromAddress || null, JSON.stringify(settings.toAddresses || []),
+    settings.notifyOnComplete ? 1 : 0, settings.notifyOnError ? 1 : 0,
+    settings.notifyOnExport ? 1 : 0, new Date().toISOString()
+  );
+}
+
+export function getSmtpSettings(projectId) {
+  const d = getDb();
+  const specific = d.prepare('SELECT * FROM smtp_settings WHERE project_id = ?').get(projectId);
+  if (specific) return specific;
+  return d.prepare('SELECT * FROM smtp_settings WHERE project_id IS NULL ORDER BY created_at DESC LIMIT 1').get();
+}
+
+// ── Health Events ──
+export function saveHealthEvent(evt) {
+  const d = getDb();
+  d.prepare(`INSERT INTO health_events (project_id, acquisition_id, event_type, severity, message, details_json, recorded_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+    evt.projectId || null, evt.acquisitionId || null, evt.eventType, evt.severity || 'info',
+    evt.message || null, JSON.stringify(evt.details || {}), new Date().toISOString()
+  );
+}
+
+export function getHealthEvents(projectId) {
+  return getDb().prepare('SELECT * FROM health_events WHERE project_id = ? ORDER BY recorded_at DESC').all(projectId);
+}
+
+// ── Acquisition Targets (Multi-Target) ──
+export function saveAcquisitionTarget(target) {
+  const d = getDb();
+  d.prepare(`INSERT OR REPLACE INTO acquisition_targets (id, batch_id, project_id, target_email, provider_type, config_json, status, acquisition_id, started_at, completed_at, error)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    target.id, target.batchId, target.projectId || null, target.targetEmail,
+    target.providerType, JSON.stringify(target.config || {}), target.status || 'pending',
+    target.acquisitionId || null, target.startedAt || null, target.completedAt || null,
+    target.error || null
+  );
+}
+
+export function getAcquisitionTargets(batchId) {
+  return getDb().prepare('SELECT * FROM acquisition_targets WHERE batch_id = ? ORDER BY id').all(batchId);
+}
+
+export function updateAcquisitionTarget(id, data) {
+  const d = getDb();
+  const sets = [];
+  const vals = [];
+  for (const [k, v] of Object.entries(data)) {
+    const col = k.replace(/([A-Z])/g, '_$1').toLowerCase();
+    sets.push(`${col} = ?`);
+    vals.push(typeof v === 'object' && v !== null ? JSON.stringify(v) : v);
+  }
+  if (sets.length) { vals.push(id); d.prepare(`UPDATE acquisition_targets SET ${sets.join(', ')} WHERE id = ?`).run(...vals); }
+}
+
+// ── Connectivity Tests ──
+export function saveConnectivityTest(test) {
+  const d = getDb();
+  d.prepare(`INSERT INTO connectivity_tests (id, project_id, host, port, protocol, tls_version, certificate_info, dns_resolved, latency_ms, auth_tested, auth_result, imap_capabilities, status, error, tested_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    test.id, test.projectId || null, test.host, test.port || null, test.protocol || null,
+    test.tlsVersion || null, JSON.stringify(test.certificateInfo || {}),
+    test.dnsResolved || null, test.latencyMs || null, test.authTested ? 1 : 0,
+    test.authResult || null, test.imapCapabilities || null, test.status,
+    test.error || null, new Date().toISOString()
+  );
+}
+
+export function getConnectivityTests(projectId) {
+  return getDb().prepare('SELECT * FROM connectivity_tests WHERE project_id = ? ORDER BY tested_at DESC').all(projectId);
+}
+
+// ── Proxy Settings ──
+export function saveProxySettings(proxy) {
+  const d = getDb();
+  d.prepare(`INSERT OR REPLACE INTO proxy_settings (id, name, proxy_type, host, port, username, password_encrypted, is_default, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    proxy.id, proxy.name, proxy.proxyType, proxy.host || null, proxy.port || null,
+    proxy.username || null, proxy.passwordEncrypted || null, proxy.isDefault ? 1 : 0,
+    new Date().toISOString()
+  );
+}
+
+export function getProxySettings() {
+  return getDb().prepare('SELECT * FROM proxy_settings ORDER BY is_default DESC, name').all();
+}
+
+export function getDefaultProxy() {
+  return getDb().prepare('SELECT * FROM proxy_settings WHERE is_default = 1 LIMIT 1').get();
+}
+
+// ── Server Profiles ──
+export function saveServerProfile(profile) {
+  const d = getDb();
+  d.prepare(`INSERT OR REPLACE INTO server_profiles (id, domain, provider_name, imap_host, imap_port, pop3_host, pop3_port, smtp_host, smtp_port, mx_records, spf_record, autodiscover_url, oauth_required, detected_protocol, confidence, detected_at, last_verified)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    profile.id, profile.domain, profile.providerName || null,
+    profile.imapHost || null, profile.imapPort || null,
+    profile.pop3Host || null, profile.pop3Port || null,
+    profile.smtpHost || null, profile.smtpPort || null,
+    JSON.stringify(profile.mxRecords || []), profile.spfRecord || null,
+    profile.autodiscoverUrl || null, profile.oauthRequired ? 1 : 0,
+    profile.detectedProtocol || null, profile.confidence || 0,
+    new Date().toISOString(), null
+  );
+}
+
+export function getServerProfile(domain) {
+  return getDb().prepare('SELECT * FROM server_profiles WHERE domain = ?').get(domain);
+}
+
+export function getAllServerProfiles() {
+  return getDb().prepare('SELECT * FROM server_profiles ORDER BY domain').all();
+}
+
+// ── Certificates ──
+export function saveCertificate(cert) {
+  const d = getDb();
+  d.prepare(`INSERT OR REPLACE INTO certificates (id, project_id, subject, issuer, serial_number, thumbprint_sha256, not_before, not_after, key_usage, email_address, pem_data, pfx_path, cert_type, imported_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    cert.id, cert.projectId || null, cert.subject || null, cert.issuer || null,
+    cert.serialNumber || null, cert.thumbprintSha256 || null,
+    cert.notBefore || null, cert.notAfter || null, cert.keyUsage || null,
+    cert.emailAddress || null, cert.pemData || null, cert.pfxPath || null,
+    cert.certType, new Date().toISOString()
+  );
+}
+
+export function getCertificates(projectId) {
+  if (projectId) return getDb().prepare('SELECT * FROM certificates WHERE project_id = ? OR project_id IS NULL ORDER BY imported_at DESC').all(projectId);
+  return getDb().prepare('SELECT * FROM certificates ORDER BY imported_at DESC').all();
+}
+
+// ── Saved Credentials ──
+export function saveCredential(cred) {
+  const d = getDb();
+  d.prepare(`INSERT OR REPLACE INTO saved_credentials (id, label, credential_type, target_host, username, encrypted_data, iv, auth_tag, metadata_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    cred.id, cred.label, cred.credentialType, cred.targetHost || null,
+    cred.username || null, cred.encryptedData || null, cred.iv || null,
+    cred.authTag || null, JSON.stringify(cred.metadata || {}),
+    new Date().toISOString(), new Date().toISOString()
+  );
+}
+
+export function getCredentials() {
+  return getDb().prepare('SELECT id, label, credential_type, target_host, username, metadata_json, created_at, updated_at FROM saved_credentials ORDER BY label').all();
+}
+
+export function getCredential(id) {
+  return getDb().prepare('SELECT * FROM saved_credentials WHERE id = ?').get(id);
+}
+
+export function deleteCredential(id) {
+  getDb().prepare('DELETE FROM saved_credentials WHERE id = ?').run(id);
+}
+
+// ── Custom IMAP Profiles ──
+export function saveCustomImapProfile(profile) {
+  const d = getDb();
+  d.prepare(`INSERT OR REPLACE INTO custom_imap_profiles (id, name, host, port, tls, auth_method, imap_capabilities, special_folders, notes, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    profile.id, profile.name, profile.host, profile.port || 993,
+    profile.tls !== false ? 1 : 0, profile.authMethod || 'password',
+    profile.imapCapabilities || null, JSON.stringify(profile.specialFolders || {}),
+    profile.notes || null, new Date().toISOString(), new Date().toISOString()
+  );
+}
+
+export function getCustomImapProfiles() {
+  return getDb().prepare('SELECT * FROM custom_imap_profiles ORDER BY name').all();
+}
+
+export function getCustomImapProfile(id) {
+  return getDb().prepare('SELECT * FROM custom_imap_profiles WHERE id = ?').get(id);
+}
+
+export function deleteCustomImapProfile(id) {
+  getDb().prepare('DELETE FROM custom_imap_profiles WHERE id = ?').run(id);
 }

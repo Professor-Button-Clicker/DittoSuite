@@ -49,6 +49,44 @@ import {
   revokeTokens as fmRevokeTokens,
 } from '../services/fastmail-auth.js';
 import { getProviders, detectProvider, getProvider, getRecommendedProtocol, getPreset, getCollectionProfiles, getCollectionProfile, getAllCollectionProfiles } from '../services/provider-profiles.js';
+import { HashManager } from '../services/hash-manager.js';
+import { Rfc3161TimestampService } from '../services/rfc3161-timestamp.js';
+import { FolderSnapshotService } from '../services/folder-snapshot.js';
+import {
+  getAuthStatus as yahooGetAuthStatus, getAuthUrl as yahooGetAuthUrl,
+  saveCredentials as yahooSaveCredentials,
+  startCallbackServer as yahooStartCallbackServer, waitForAuth as yahooWaitForAuth,
+  stopCallbackServer as yahooStopCallbackServer, revokeTokens as yahooRevokeTokens,
+} from '../services/yahoo-oauth.js';
+import { EnterpriseAuthService } from '../services/enterprise-auth.js';
+import { ExchangeAdvancedService } from '../services/exchange-advanced.js';
+import { LocalImportService } from '../services/local-import.js';
+import { CloudCollectionService } from '../services/cloud-collection.js';
+import { CloudDownloadPipeline } from '../services/cloud-download-pipeline.js';
+import { ContainerService } from '../services/container-service.js';
+import { ReportService } from '../services/report-service.js';
+import { AdvancedSearchService } from '../services/advanced-search.js';
+import { AutomationService } from '../services/automation-service.js';
+import { CryptoService } from '../services/crypto-service.js';
+import {
+  saveRfc3161Timestamp, getRfc3161Timestamps,
+  saveFolderSnapshot, getFolderSnapshots,
+  saveDriveItem, getDriveItems, updateDriveItem,
+  saveCalendarEvent, getCalendarEvents,
+  saveContact, getContacts,
+  saveCloudDownload, getCloudDownloads, updateCloudDownload,
+  savePreAcquisitionSearch, getPreAcquisitionSearches,
+  indexMessage, searchIndex,
+  saveSmtpSettings, getSmtpSettings,
+  saveHealthEvent, getHealthEvents,
+  saveAcquisitionTarget, getAcquisitionTargets, updateAcquisitionTarget,
+  saveConnectivityTest, getConnectivityTests,
+  saveProxySettings, getProxySettings, getDefaultProxy,
+  saveServerProfile, getServerProfile, getAllServerProfiles,
+  saveCertificate, getCertificates,
+  saveCredential, getCredentials, getCredential, deleteCredential,
+  saveCustomImapProfile, getCustomImapProfiles, getCustomImapProfile, deleteCustomImapProfile,
+} from '../db/database.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '..', '..', 'data');
@@ -1605,6 +1643,715 @@ router.get('/projects/:id/verify', (req, res) => {
 
   res.json(verification);
 });
+
+// ══════════════════════════════════════════════════════════════
+// ── CATEGORY 1: Forensic Integrity (Features 1-3) ──
+// ══════════════════════════════════════════════════════════════
+
+// Feature 1: RFC 3161 Trusted Timestamping
+router.get('/rfc3161/tsas', (req, res) => {
+  res.json(Rfc3161TimestampService.getAvailableTSAs());
+});
+
+router.post('/projects/:id/rfc3161/timestamp', async (req, res) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const { targetType, targetHash, tsaUrl } = req.body;
+    if (!targetHash || !tsaUrl) return res.status(400).json({ error: 'targetHash and tsaUrl required' });
+    const result = await Rfc3161TimestampService.requestTimestamp(targetHash, tsaUrl, req.body);
+    result.projectId = req.params.id;
+    result.targetType = targetType || 'manual';
+    saveRfc3161Timestamp(result);
+    addAuditEntry(req.params.id, 'RFC3161_TIMESTAMP', `RFC 3161 timestamp requested from ${result.tsaName}`, { tsaUrl, targetType, status: result.status }, project.examiner_name);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/projects/:id/rfc3161/timestamp-collection', async (req, res) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const messages = getAllProjectMessages(req.params.id);
+    const { tsaUrl } = req.body;
+    if (!tsaUrl) return res.status(400).json({ error: 'tsaUrl required' });
+    const result = await Rfc3161TimestampService.timestampCollection(req.params.id, messages, tsaUrl, req.body);
+    saveRfc3161Timestamp(result);
+    addAuditEntry(req.params.id, 'RFC3161_COLLECTION_TIMESTAMP', `Collection timestamped via RFC 3161 (${messages.length} messages)`, { tsaUrl, messageCount: messages.length, status: result.status }, project.examiner_name);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/rfc3161/timestamps', (req, res) => {
+  res.json(getRfc3161Timestamps(req.params.id));
+});
+
+router.get('/rfc3161/info', (req, res) => {
+  res.json(Rfc3161TimestampService.getInfo());
+});
+
+// Feature 2: Multi-Algorithm Hashing
+router.post('/hash/compute', (req, res) => {
+  try {
+    const { data, algorithms } = req.body;
+    if (!data) return res.status(400).json({ error: 'data required' });
+    const result = algorithms ? HashManager.computeSelected(data, algorithms) : HashManager.computeAll(data);
+    res.json(result);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+router.post('/hash/verify', (req, res) => {
+  try {
+    const { data, expectedHashes } = req.body;
+    if (!data || !expectedHashes) return res.status(400).json({ error: 'data and expectedHashes required' });
+    res.json(HashManager.verify(data, expectedHashes));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+router.get('/hash/algorithms', (req, res) => {
+  res.json(HashManager.getAlgorithmInfo());
+});
+
+// Feature 3: Folder Snapshots
+router.post('/projects/:id/snapshots', (req, res) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const folders = getFolders(req.params.id);
+    const { snapshotType, acquisitionId } = req.body;
+    const snapshot = FolderSnapshotService.captureSnapshot(req.params.id, folders, acquisitionId, snapshotType || 'manual');
+    saveFolderSnapshot(snapshot);
+    addAuditEntry(req.params.id, 'FOLDER_SNAPSHOT', `Folder snapshot captured (${snapshot.totalFolders} folders, ${snapshot.totalMessages} messages)`, { snapshotType: snapshotType || 'manual', totalFolders: snapshot.totalFolders }, project.examiner_name);
+    res.json(snapshot);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/snapshots', (req, res) => {
+  res.json(getFolderSnapshots(req.params.id));
+});
+
+router.post('/projects/:id/snapshots/compare', (req, res) => {
+  try {
+    const snapshots = getFolderSnapshots(req.params.id);
+    if (snapshots.length < 2) return res.status(400).json({ error: 'Need at least 2 snapshots to compare' });
+    const pre = snapshots[snapshots.length - 1];
+    const post = snapshots[0];
+    res.json(FolderSnapshotService.compareSnapshots(pre, post));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════
+// ── CATEGORY 2: Protocol & Provider Coverage (Features 4-9) ──
+// ══════════════════════════════════════════════════════════════
+
+// Feature 4: Yahoo OAuth
+router.get('/oauth/yahoo/status', (req, res) => { res.json(yahooGetAuthStatus()); });
+router.post('/oauth/yahoo/credentials', (req, res) => {
+  try { yahooSaveCredentials(req.body); res.json({ success: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+router.get('/oauth/yahoo/authorize', async (req, res) => {
+  try {
+    await yahooStartCallbackServer();
+    const url = yahooGetAuthUrl();
+    if (!url) return res.status(400).json({ error: 'Yahoo OAuth credentials not configured' });
+    res.json({ url });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+router.get('/oauth/yahoo/wait', async (req, res) => {
+  try { const result = await yahooWaitForAuth(); yahooStopCallbackServer(); res.json(result); }
+  catch (err) { yahooStopCallbackServer(); res.status(500).json({ error: err.message }); }
+});
+router.post('/oauth/yahoo/revoke', (req, res) => { res.json(yahooRevokeTokens()); });
+
+// Feature 5: Enterprise App-Only Auth + Feature 9: Azure Sovereign Clouds
+router.get('/enterprise/azure-environments', (req, res) => {
+  res.json(EnterpriseAuthService.getAzureEnvironments());
+});
+
+router.post('/enterprise/authenticate', async (req, res) => {
+  try {
+    const { method } = req.body;
+    let result;
+    if (method === 'certificate') result = await EnterpriseAuthService.authenticateWithCertificate(req.body);
+    else result = await EnterpriseAuthService.authenticateAppOnly(req.body);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Feature 8: Remote Token Import
+router.post('/enterprise/import-token', async (req, res) => {
+  try {
+    const result = await EnterpriseAuthService.importToken(req.body.tokenData || req.body);
+    res.json(result);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Feature 6: Exchange Advanced Features
+router.get('/projects/:id/exchange/recoverable-items', async (req, res) => {
+  try {
+    const result = await ExchangeAdvancedService.getRecoverableItems(null, req.query.email, req.query);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/exchange/public-folders', async (req, res) => {
+  try { res.json(await ExchangeAdvancedService.getPublicFolders(null, req.query)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/exchange/archive', async (req, res) => {
+  try { res.json(await ExchangeAdvancedService.getArchiveMailbox(null, req.query.email, req.query)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/exchange/inbox-rules', async (req, res) => {
+  try { res.json(await ExchangeAdvancedService.getInboxRules(null, req.query.email)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/exchange/detect-version', async (req, res) => {
+  try { res.json(await ExchangeAdvancedService.detectExchangeVersion(req.query.host)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Feature 7: Local File Import (MBOX/PST/EML)
+router.post('/projects/:id/import', async (req, res) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const { filePath, format, targetFolder } = req.body;
+    if (!filePath) return res.status(400).json({ error: 'filePath required' });
+    if (!fs.existsSync(filePath)) return res.status(400).json({ error: 'File not found' });
+
+    let result;
+    const ext = (format || path.extname(filePath).slice(1)).toLowerCase();
+    if (ext === 'mbox' || ext === 'mbx') {
+      result = await LocalImportService.importMbox(filePath, req.params.id, { targetFolder });
+    } else if (ext === 'pst') {
+      result = await LocalImportService.importPst(filePath, req.params.id, { targetFolder });
+    } else if (ext === 'eml' || fs.statSync(filePath).isDirectory()) {
+      result = await LocalImportService.importEmlDirectory(filePath, req.params.id, { targetFolder });
+    } else {
+      return res.status(400).json({ error: `Unsupported format: ${ext}. Supported: mbox, pst, eml` });
+    }
+
+    for (const msg of result.messages.filter(m => !m.error)) {
+      saveMessage(msg);
+      if (msg.attachments) for (const att of msg.attachments) saveAttachment({ ...att, messageId: msg.id });
+    }
+
+    addAuditEntry(req.params.id, 'LOCAL_IMPORT', `Imported ${result.successful} messages from ${ext.toUpperCase()} file`, { source: filePath, format: ext, total: result.totalParsed || result.totalFiles, successful: result.successful, failed: result.failed }, project.examiner_name);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/import/formats', (req, res) => {
+  res.json(LocalImportService.getSupportedFormats());
+});
+
+// ══════════════════════════════════════════════════════════════
+// ── CATEGORY 3: Cloud & Drive Collection (Features 10-15) ──
+// ══════════════════════════════════════════════════════════════
+
+// Feature 10: Google Drive Collection
+router.get('/projects/:id/drive/google/items', async (req, res) => {
+  try {
+    const result = await CloudCollectionService.listGoogleDriveItems(req.query.accessToken, req.query);
+    for (const item of result.items) { item.projectId = req.params.id; saveDriveItem(item); }
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/drive/google/shared-drives', async (req, res) => {
+  try { res.json(await CloudCollectionService.listGoogleSharedDrives(req.query.accessToken)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/drive/google/revisions/:fileId', async (req, res) => {
+  try { res.json(await CloudCollectionService.getGoogleDriveRevisions(req.query.accessToken, req.params.fileId)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Feature 11: OneDrive Collection
+router.get('/projects/:id/drive/onedrive/items', async (req, res) => {
+  try {
+    const result = await CloudCollectionService.listOneDriveItems(req.query.accessToken, req.query);
+    for (const item of result.items) { item.projectId = req.params.id; saveDriveItem(item); }
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/drive/onedrive/revisions/:itemId', async (req, res) => {
+  try { res.json(await CloudCollectionService.getOneDriveRevisions(req.query.accessToken, req.params.itemId, req.query.userId)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Feature 12: SharePoint Collection
+router.get('/projects/:id/drive/sharepoint/sites', async (req, res) => {
+  try { res.json(await CloudCollectionService.listSharePointSites(req.query.accessToken, req.query.search)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/drive/sharepoint/documents/:siteId', async (req, res) => {
+  try { res.json(await CloudCollectionService.listSharePointDocuments(req.query.accessToken, req.params.siteId, req.query)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Feature 13: Google Calendar Collection
+router.get('/projects/:id/calendar/events', async (req, res) => {
+  try {
+    const result = await CloudCollectionService.listGoogleCalendarEvents(req.query.accessToken, req.query);
+    for (const evt of result.events) { evt.projectId = req.params.id; saveCalendarEvent(evt); }
+    addAuditEntry(req.params.id, 'CALENDAR_COLLECTED', `Collected ${result.events.length} calendar events`);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/calendar', (req, res) => {
+  res.json(getCalendarEvents(req.params.id));
+});
+
+// Feature 14: Contact Collection
+router.get('/projects/:id/contacts/google', async (req, res) => {
+  try {
+    const result = await CloudCollectionService.listGoogleContacts(req.query.accessToken, req.query);
+    for (const c of result.contacts) { c.projectId = req.params.id; saveContact(c); }
+    addAuditEntry(req.params.id, 'CONTACTS_COLLECTED', `Collected ${result.contacts.length} Google contacts`);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/contacts/microsoft', async (req, res) => {
+  try {
+    const result = await CloudCollectionService.listMicrosoftContacts(req.query.accessToken, req.query);
+    for (const c of result.contacts) { c.projectId = req.params.id; saveContact(c); }
+    addAuditEntry(req.params.id, 'CONTACTS_COLLECTED', `Collected ${result.contacts.length} Microsoft contacts`);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/contacts', (req, res) => {
+  res.json(getContacts(req.params.id));
+});
+
+// Feature 15: Cloud Attachment Download Pipeline
+router.post('/projects/:id/cloud-attachments/download', async (req, res) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const links = getDriveLinks(req.params.id);
+    if (links.length === 0) return res.json({ totalLinks: 0, downloaded: 0, message: 'No cloud links to download' });
+    const outputDir = path.join(DATA_DIR, 'projects', req.params.id);
+    const result = await CloudDownloadPipeline.processLinks(req.params.id, links, req.body.accessTokens || {}, outputDir);
+    for (const dl of result.results) saveCloudDownload(dl);
+    addAuditEntry(req.params.id, 'CLOUD_ATTACHMENTS_DOWNLOADED', `Downloaded ${result.downloaded} of ${result.totalLinks} cloud attachments`, { downloaded: result.downloaded, failed: result.failed, totalBytes: result.totalBytes }, project.examiner_name);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/cloud-downloads', (req, res) => {
+  res.json(getCloudDownloads(req.params.id));
+});
+
+// Drive items listing
+router.get('/projects/:id/drive-items', (req, res) => {
+  res.json(getDriveItems(req.params.id, req.query.provider));
+});
+
+// ══════════════════════════════════════════════════════════════
+// ── CATEGORY 4: Export & Containerization (Features 16-20) ──
+// ══════════════════════════════════════════════════════════════
+
+// Feature 16: VHDX Container Export
+router.post('/projects/:id/export/vhdx', (req, res) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const exportDir = req.body.exportDir || path.join(DATA_DIR, 'exports', req.params.id);
+    if (!fs.existsSync(exportDir)) return res.status(400).json({ error: 'Export directory not found — run an export first' });
+    const outputPath = req.body.outputPath || path.join(DATA_DIR, 'exports', req.params.id, `evidence_${Date.now()}.vhdx`);
+    const result = ContainerService.createVhdxContainer(exportDir, outputPath, { label: project.name });
+    addAuditEntry(req.params.id, 'VHDX_CREATED', `VHDX container created (${result.fileCount} files, ${result.size} bytes)`, { outputPath, hashes: result.hashes }, project.examiner_name);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Feature 17: PST Writer
+router.post('/projects/:id/export/pst-create', (req, res) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const messages = getAllProjectMessages(req.params.id);
+    const folders = getFolders(req.params.id);
+    const outputPath = req.body.outputPath || path.join(DATA_DIR, 'exports', req.params.id, `collection_${Date.now()}.pst`);
+    const result = ContainerService.createPstFile(messages, folders, outputPath, { displayName: project.name, ExportService });
+    addAuditEntry(req.params.id, 'PST_CREATED', `PST file created (${result.messageCount} messages)`, { outputPath, hashes: result.hashes }, project.examiner_name);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Feature 18: History Report
+router.get('/projects/:id/reports/history', (req, res) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const auditLog = getAuditLog(req.params.id);
+    const acquisitions = getAcquisitions(req.params.id);
+    const exports = getExportRecords(req.params.id);
+    const report = ReportService.generateHistoryReport(project, auditLog, acquisitions, exports);
+    if (req.query.save === 'true') {
+      const outDir = path.join(DATA_DIR, 'reports', req.params.id);
+      fs.mkdirSync(outDir, { recursive: true });
+      fs.writeFileSync(path.join(outDir, report.filename), report.content);
+    }
+    res.json(report);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Feature 19: Revision Report
+router.get('/projects/:id/reports/revisions', (req, res) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const driveItems = getDriveItems(req.params.id);
+    const report = ReportService.generateRevisionReport(project, driveItems, []);
+    res.json(report);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Feature 20: Log Compression
+router.post('/projects/:id/logs/compress', async (req, res) => {
+  try {
+    const logsDir = req.body.logsDir || path.join(DATA_DIR, 'logs', req.params.id);
+    const outputPath = req.body.outputPath || path.join(DATA_DIR, 'exports', req.params.id, `logs_${Date.now()}.zip`);
+    const result = await ReportService.compressLogs(req.params.id, logsDir, outputPath);
+    if (result.compressed) {
+      addAuditEntry(req.params.id, 'LOGS_COMPRESSED', `${result.fileCount} log files compressed`, { outputPath, hash: result.hash });
+    }
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════
+// ── CATEGORY 5: Search & Filtering (Features 21-23) ──
+// ══════════════════════════════════════════════════════════════
+
+// Feature 21: Pre-Acquisition Server-Side Search
+router.post('/projects/:id/search/pre-acquisition', async (req, res) => {
+  try {
+    const project = getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const result = await AdvancedSearchService.preAcquisitionSearch({ client: null }, req.body.criteria || req.body);
+    result.projectId = req.params.id;
+    savePreAcquisitionSearch(result);
+    addAuditEntry(req.params.id, 'PRE_ACQUISITION_SEARCH', `Pre-acquisition search: ${result.resultCount} matches`, { criteria: req.body.criteria || req.body, resultCount: result.resultCount });
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/search/pre-acquisition', (req, res) => {
+  res.json(getPreAcquisitionSearches(req.params.id));
+});
+
+// Feature 22: Full-Text Index Search
+router.post('/projects/:id/search/index', (req, res) => {
+  try {
+    const messages = getAllProjectMessages(req.params.id);
+    let indexed = 0;
+    for (const msg of messages) {
+      indexMessage(req.params.id, msg.id, {
+        subject: msg.subject,
+        body: msg.body_text,
+        from: msg.from_address,
+        to: msg.to_addresses,
+        cc: msg.cc_addresses,
+        folder: msg.folder,
+      });
+      indexed++;
+    }
+    res.json({ indexed, projectId: req.params.id });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/search/fulltext', (req, res) => {
+  try {
+    const { query, fields } = req.query;
+    if (!query) return res.status(400).json({ error: 'query parameter required' });
+    const fieldList = fields ? fields.split(',') : null;
+    const messageIds = searchIndex(req.params.id, query, fieldList);
+    const messages = messageIds.map(id => getMessage(id)).filter(Boolean);
+    res.json({ query, resultCount: messages.length, messages });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Feature 23: Differential/Incremental Acquisition
+router.get('/projects/:id/differential/plan', (req, res) => {
+  try {
+    const messages = getAllProjectMessages(req.params.id);
+    const folders = getFolders(req.params.id);
+    const plan = AdvancedSearchService.computeDifferentialPlan(messages, folders);
+    res.json(plan);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/differential/ids', (req, res) => {
+  res.json(getDifferentialIds(req.params.id));
+});
+
+// ══════════════════════════════════════════════════════════════
+// ── CATEGORY 6: Automation & Operations (Features 24-31) ──
+// ══════════════════════════════════════════════════════════════
+
+// Feature 24: SMTP Notifications
+router.post('/notifications/smtp/settings', (req, res) => {
+  try {
+    const settings = { id: req.body.id || crypto.randomUUID(), ...req.body };
+    saveSmtpSettings(settings);
+    res.json({ success: true, id: settings.id });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/notifications/smtp/settings/:projectId', (req, res) => {
+  const settings = getSmtpSettings(req.params.projectId);
+  if (settings) { delete settings.password_encrypted; }
+  res.json(settings || { configured: false });
+});
+
+router.post('/notifications/smtp/test', async (req, res) => {
+  try {
+    const result = await AutomationService.sendNotification(req.body, {
+      type: 'test',
+      projectName: 'Test Notification',
+      details: { message: 'This is a test notification from SherlockMail' },
+    });
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Feature 25: CLI Commands Info
+router.get('/cli/commands', (req, res) => {
+  res.json(AutomationService.getCliCommands());
+});
+
+// Feature 26: Health Monitoring
+router.get('/health', (req, res) => {
+  res.json(AutomationService.checkHealth());
+});
+
+router.get('/health/disk', async (req, res) => {
+  const targetPath = req.query.path || DATA_DIR;
+  res.json(await AutomationService.checkDiskSpace(targetPath));
+});
+
+router.get('/projects/:id/health/events', (req, res) => {
+  res.json(getHealthEvents(req.params.id));
+});
+
+// Feature 27: Acquisition Insights
+router.get('/projects/:id/insights', (req, res) => {
+  try {
+    const messages = getAllProjectMessages(req.params.id);
+    const acquisitions = getAcquisitions(req.params.id);
+    const folders = getFolders(req.params.id);
+    res.json(AutomationService.generateInsights(messages, acquisitions, folders));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Feature 28: Multi-Target Acquisition
+router.post('/acquisitions/batch', (req, res) => {
+  try {
+    const { targets } = req.body;
+    if (!targets || !targets.length) return res.status(400).json({ error: 'targets array required' });
+    const batch = AutomationService.createBatch(targets);
+    for (const target of batch.targets) {
+      const project = createProject({
+        name: `Batch — ${target.targetEmail}`,
+        targetEmail: target.targetEmail,
+        providerType: target.providerType,
+        caseName: req.body.caseName,
+        caseId: req.body.caseId,
+        examinerName: req.body.examinerName,
+      });
+      target.projectId = project.id;
+      saveAcquisitionTarget(target);
+    }
+    res.json(batch);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/acquisitions/batch/:batchId', (req, res) => {
+  res.json(getAcquisitionTargets(req.params.batchId));
+});
+
+// Feature 29: Connectivity Testing
+router.post('/connectivity/test', async (req, res) => {
+  try {
+    const { host, port, protocol } = req.body;
+    if (!host) return res.status(400).json({ error: 'host required' });
+    const result = await AutomationService.testConnectivity(host, port || 993, protocol || 'imaps', req.body);
+    if (req.body.projectId) { result.projectId = req.body.projectId; saveConnectivityTest(result); }
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/projects/:id/connectivity/tests', (req, res) => {
+  res.json(getConnectivityTests(req.params.id));
+});
+
+// Feature 30: Proxy Support
+router.post('/proxy/settings', (req, res) => {
+  try {
+    const proxy = { id: crypto.randomUUID(), ...req.body };
+    saveProxySettings(proxy);
+    res.json({ success: true, id: proxy.id });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/proxy/settings', (req, res) => {
+  const proxies = getProxySettings();
+  for (const p of proxies) delete p.password_encrypted;
+  res.json(proxies);
+});
+
+router.get('/proxy/default', (req, res) => {
+  const proxy = getDefaultProxy();
+  if (proxy) delete proxy.password_encrypted;
+  res.json(proxy || { configured: false });
+});
+
+// Feature 31: Server Profile Auto-Detection
+router.post('/server-profiles/detect', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'email required' });
+    const profile = await AutomationService.detectServerProfile(email);
+    saveServerProfile(profile);
+    res.json(profile);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/server-profiles', (req, res) => {
+  res.json(getAllServerProfiles());
+});
+
+router.get('/server-profiles/:domain', (req, res) => {
+  const profile = getServerProfile(req.params.domain);
+  res.json(profile || { found: false, domain: req.params.domain });
+});
+
+// ══════════════════════════════════════════════════════════════
+// ── CATEGORY 7: Security & Cryptography (Features 32-35) ──
+// ══════════════════════════════════════════════════════════════
+
+// Feature 32: S/MIME Decryption
+router.post('/projects/:id/crypto/decrypt', async (req, res) => {
+  try {
+    const certs = getCertificates(req.params.id);
+    const result = await CryptoService.decryptMessage(req.body.content, certs);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Feature 33: Digital Signature Verification
+router.post('/projects/:id/crypto/verify-signature', async (req, res) => {
+  try {
+    const result = await CryptoService.verifySignature(req.body.content, req.body.options);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Certificate management
+router.post('/certificates', (req, res) => {
+  try {
+    const cert = { id: crypto.randomUUID(), ...req.body };
+    saveCertificate(cert);
+    addAuditEntry(req.body.projectId, 'CERTIFICATE_IMPORTED', `Certificate imported: ${cert.subject || cert.email_address || 'unknown'}`, { certType: cert.certType, thumbprint: cert.thumbprintSha256 });
+    res.json({ success: true, id: cert.id });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/certificates', (req, res) => {
+  const certs = getCertificates(req.query.projectId);
+  for (const c of certs) { delete c.pem_data; delete c.pfx_path; }
+  res.json(certs);
+});
+
+// Feature 34: Credential Manager
+router.post('/credentials', (req, res) => {
+  try {
+    const { label, credentialType, targetHost, username, password, masterKey } = req.body;
+    if (!label || !credentialType || !password || !masterKey) return res.status(400).json({ error: 'label, credentialType, password, masterKey required' });
+    const encrypted = CryptoService.encryptCredential(password, masterKey);
+    const cred = { id: crypto.randomUUID(), label, credentialType, targetHost, username, ...encrypted, metadata: req.body.metadata || {} };
+    saveCredential(cred);
+    res.json({ success: true, id: cred.id });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/credentials', (req, res) => {
+  res.json(getCredentials());
+});
+
+router.post('/credentials/:id/decrypt', (req, res) => {
+  try {
+    const cred = getCredential(req.params.id);
+    if (!cred) return res.status(404).json({ error: 'Credential not found' });
+    const { masterKey } = req.body;
+    if (!masterKey) return res.status(400).json({ error: 'masterKey required' });
+    const decrypted = CryptoService.decryptCredential(cred.encrypted_data, cred.iv, cred.auth_tag, masterKey);
+    res.json({ id: cred.id, label: cred.label, decrypted });
+  } catch (err) { res.status(400).json({ error: 'Decryption failed — wrong master key?' }); }
+});
+
+router.delete('/credentials/:id', (req, res) => {
+  deleteCredential(req.params.id);
+  res.json({ success: true });
+});
+
+// Feature 35: Custom IMAP Profiles
+router.post('/imap-profiles', (req, res) => {
+  try {
+    const profile = { id: crypto.randomUUID(), ...req.body };
+    saveCustomImapProfile(profile);
+    res.json({ success: true, id: profile.id });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/imap-profiles', (req, res) => {
+  res.json(getCustomImapProfiles());
+});
+
+router.get('/imap-profiles/:id', (req, res) => {
+  const profile = getCustomImapProfile(req.params.id);
+  if (!profile) return res.status(404).json({ error: 'Profile not found' });
+  res.json(profile);
+});
+
+router.delete('/imap-profiles/:id', (req, res) => {
+  deleteCustomImapProfile(req.params.id);
+  res.json({ success: true });
+});
+
+router.post('/imap-profiles/:id/export', (req, res) => {
+  try {
+    const profile = getCustomImapProfile(req.params.id);
+    if (!profile) return res.status(404).json({ error: 'Profile not found' });
+    res.json(CryptoService.exportProfile(profile));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post('/imap-profiles/import', (req, res) => {
+  try {
+    const { xmlContent } = req.body;
+    if (!xmlContent) return res.status(400).json({ error: 'xmlContent required' });
+    const profile = CryptoService.importProfile(xmlContent);
+    saveCustomImapProfile(profile);
+    res.json({ success: true, profile });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ══════════════════════════════════════════════════════════════
 
 function verifyAuditChain(auditLog) {
   if (auditLog.length === 0) return { valid: true, entries: 0, breaks: [] };
