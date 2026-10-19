@@ -2255,6 +2255,14 @@ async function wizStartCollection() {
   }, 500);
 
   try {
+    if (wizConnection.protocol && currentProject.provider_type !== wizConnection.protocol) {
+      await api(`/projects/${currentProject.id}`, {
+        method: 'PUT',
+        body: { provider_type: wizConnection.protocol }
+      });
+      currentProject.provider_type = wizConnection.protocol;
+    }
+
     const result = await api(`/projects/${currentProject.id}/collect`, {
       method: 'POST',
       body: {

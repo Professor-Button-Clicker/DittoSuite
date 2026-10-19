@@ -792,7 +792,9 @@ router.post('/projects/:id/collect', async (req, res) => {
       return result;
     };
 
-    switch (project.provider_type) {
+    const effectiveProtocol = config?.protocol || project.provider_type;
+
+    switch (effectiveProtocol) {
       case 'imap': {
         if (!config?.host) throw new Error('IMAP host is required');
         handler = new ImapHandler(config);
