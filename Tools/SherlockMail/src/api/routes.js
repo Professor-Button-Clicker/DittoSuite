@@ -100,7 +100,7 @@ const DATA_DIR = process.env.SHERLOCKMAIL_DATA_DIR || path.join(__dirname, '..',
 
 const router = Router();
 
-// ── FEC-Pattern Helpers ──
+// ── Collection Helpers ──
 
 function sanitizeFolderName(folderPath) {
   return folderPath.replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim() || 'INBOX';
@@ -1714,7 +1714,7 @@ router.get('/projects/:id/chain-of-custody', (req, res) => {
     toolInfo: {
       name: 'SherlockMail',
       version: '0.9.0',
-      description: 'FEC-grade forensic email collection tool',
+      description: 'Forensic email collection tool',
     },
     caseInfo: {
       projectName: project.name,
@@ -2675,12 +2675,12 @@ router.post('/imap-profiles/import', (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
-// ── FEC-PARITY UPGRADES: File Detection, Metadata Export,    ──
+// ── ADVANCED FEATURES: File Detection, Metadata Export,      ──
 // ── Retry/Rate-Limit, Email Validation, AutoDiscover,        ──
 // ── Hash File Ops, Timestamp Verification                    ──
 // ══════════════════════════════════════════════════════════════
 
-// ── File Type Detection (matching FEC's FileTypeDetector) ──
+// ── File Type Detection ──
 router.post('/detect/file', (req, res) => {
   try {
     const { filePath } = req.body;
@@ -2707,7 +2707,7 @@ router.post('/detect/classify', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Metadata Export (matching FEC's 12 MetadataExportMap types) ──
+// ── Metadata Export ──
 router.get('/metadata-export/types', (req, res) => {
   res.json(MetadataExportService.getAvailableExportTypes());
 });
@@ -2846,7 +2846,7 @@ router.post('/projects/:id/rfc3161/verify-chain', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Email Validation (matching FEC's EmailValidation) ──
+// ── Email Validation ──
 router.post('/validate/email', (req, res) => {
   try {
     const { email } = req.body;
@@ -2863,7 +2863,7 @@ router.post('/validate/email/mx', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Exchange AutoDiscover (matching FEC's ExchangeAutoDiscover) ──
+// ── Exchange AutoDiscover ──
 router.post('/exchange/autodiscover', async (req, res) => {
   try {
     const { email } = req.body;
@@ -2872,7 +2872,7 @@ router.post('/exchange/autodiscover', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── Session/Output Naming (matching FEC's SessionNameCreator) ──
+// ── Session/Output Naming ──
 router.post('/session/name', (req, res) => {
   try {
     const { projectName, targetEmail, counter } = req.body;

@@ -706,7 +706,7 @@ export class AutomationService {
     });
   }
 
-  // ── Session/Output Naming (matching FEC's SessionNameCreator) ──
+  // ── Session/Output Naming ──
 
   static createSessionName(projectName, targetEmail, options = {}) {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);

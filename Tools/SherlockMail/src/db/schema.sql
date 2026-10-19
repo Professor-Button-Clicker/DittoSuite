@@ -1,5 +1,4 @@
--- SherlockMail Forensic Email Collector - Database Schema
--- Mirrors and extends the capabilities found in Metaspike FEC
+-- SherlockMail - Database Schema
 
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY,

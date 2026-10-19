@@ -1,59 +1,27 @@
 # SherlockMail
 
-**v0.9.0** | FEC-grade forensic email collection desktop application for digital forensic and incident response (DFIR) investigations.
+**v0.9.0** | Forensic email collection desktop application for digital forensic and incident response (DFIR) investigations.
 
 SherlockMail supports **7 email protocols** across **11 email providers** with multi-profile collection, automatic fallback switching, full chain-of-custody tracking, triple-hash verification (MD5 + SHA-256 + SHA-512), and standards-compliant evidence handling.
 
-## Prerequisites
+## Quick Start
 
-SherlockMail requires **Node.js** and **Electron** to run. The install script handles both automatically.
+### Windows Installer (Recommended)
 
-- **Node.js** (v18 or later) — JavaScript runtime ([download](https://nodejs.org/))
-- **Electron** — Installed automatically by `npm install` as a project dependency
+1. Download **SherlockMail-Setup-0.9.0.exe** from the [latest release](../../releases/latest)
+2. Run the installer — SherlockMail installs automatically
+3. Launch from Start Menu or desktop shortcut
 
-You do **not** need to install Electron separately. Running the install script or `npm install` will download and configure Electron along with all other dependencies.
+The installer is fully self-contained. No additional software (Node.js, Electron, etc.) is required.
 
-## Installation
+### From Source
 
-### Windows (Recommended)
+If you prefer to run from source or develop:
 
-1. Download or clone this repository
-2. Double-click **`install.bat`**
-   - Checks for Node.js and installs it via winget if missing
-   - Runs `npm install` to download Electron and all dependencies
-   - If Node.js was just installed, close and reopen your terminal, then run `install.bat` again
-3. Once setup completes, launch SherlockMail with **`start.bat`** or `npm start`
-
-### Manual Setup (All Platforms)
-
-1. Install [Node.js](https://nodejs.org/) (LTS version recommended)
-2. Open a terminal in the SherlockMail directory
-3. Run:
-   ```bash
-   npm install
-   ```
-   This installs Electron and all dependencies.
-4. Launch:
-   ```bash
-   npm start
-   ```
-
-## What Gets Installed
-
-When you run `install.bat` or `npm install`, the following are installed locally to this project (not system-wide):
-
-| Component | Purpose |
-|-----------|---------|
-| **Electron** | Desktop application framework (renders the app window) |
-| **Express** | Local web server powering the application UI |
-| **googleapis** | Google API client for Gmail API collection |
-| **imapflow** | IMAP protocol handler with EXAMINE (read-only) mode |
-| **mailparser** | Email parsing, MIME decoding, and header analysis |
-| **uuid** | RFC 4122 UUID generation for evidence identifiers |
-| **electron-builder** | Build tool for creating distributable installers |
-| **sharp** | Image processing for attachment thumbnails |
-
-All dependencies install into the `node_modules/` folder within the project directory.
+1. Install [Node.js](https://nodejs.org/) v18 or later
+2. Clone this repository
+3. Run `install.bat` (Windows) or `npm install`
+4. Launch with `start.bat` or `npm start`
 
 ## Supported Email Providers (11)
 
@@ -79,8 +47,8 @@ Each provider has multiple collection profiles ranked by priority. If the primar
 |----------|-------------|-----------------|
 | **IMAP** | Internet Message Access Protocol — EXAMINE mode (read-only, ISO 27037) | Read-only |
 | **POP3** | Post Office Protocol — Inbox only, may trigger deletion on some servers | Warning |
-| **EWS** | Exchange Web Services — Full Exchange access including Recoverable Items | Read-only |
-| **Microsoft Graph API** | Modern REST API for Microsoft 365 and Exchange Online | Read-only |
+| **EWS** | Exchange Web Services — Full Exchange access with SOAP/HTTPS, Autodiscover, KQL search, and paginated FindItem | Read-only |
+| **Microsoft Graph API** | Modern REST API for Microsoft 365 and Exchange Online with paginated message download | Read-only |
 | **Gmail API** | Google REST API with label support and raw MIME download | Read-only |
 | **Zoho Mail API** | Zoho REST API with regional endpoint auto-detection (US/EU/IN/AU/JP) | Read-only |
 | **JMAP** | JSON Meta Application Protocol (RFC 8621) — Modern, efficient, JSON-based | Read-only |
@@ -168,20 +136,9 @@ SherlockMail is designed to align with the following standards:
 
 > **Important**: SherlockMail's internal timestamps are structured per RFC 3161 but are NOT issued by an accredited Qualified Trust Service Provider (QTSP). For court-admissible timestamps with independent attestation, connect to a production TSA such as DigiCert, Sectigo, GlobalSign, or FreeTSA.
 
-## Database
+## Building from Source
 
-SherlockMail uses Node.js built-in SQLite (`node:sqlite`, DatabaseSync) with WAL mode. The database schema includes tables for:
-
-- Projects, Folders, Messages, Attachments
-- Acquisitions, Search Queries, Export Records
-- Audit Log (hash-chained), QC Results
-- Differential IDs, Drive Links, Timestamp Records, Inline Searches
-
-All data is stored locally in the `data/` directory within the project.
-
-## Building a Distributable Installer
-
-To create a standalone installer that does **not** require end users to install Node.js or Electron:
+To create standalone installers:
 
 ```bash
 npm run build:win     # Windows (.exe NSIS installer)
@@ -189,7 +146,7 @@ npm run build:mac     # macOS (.dmg)
 npm run build:linux   # Linux (.AppImage)
 ```
 
-Built installers are placed in the `release/` directory. These are fully self-contained and bundle Electron internally — end users do not need Node.js or Electron installed.
+Built installers are placed in the `release/` directory.
 
 ## Project Structure
 

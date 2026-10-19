@@ -1,7 +1,7 @@
 {
   "name": "sherlock-mail",
   "version": "0.9.0",
-  "description": "FEC-grade forensic email collection desktop app — acquisition, inline search, quality control, and evidence integrity",
+  "description": "Forensic email collection desktop app — acquisition, inline search, quality control, and evidence integrity",
   "main": "main.js",
   "type": "module",
   "scripts": {

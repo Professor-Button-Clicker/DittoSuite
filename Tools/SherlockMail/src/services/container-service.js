@@ -255,7 +255,7 @@ export class ContainerService {
     return { content, size: Buffer.byteLength(content) };
   }
 
-  // ── ZIP Container with Deflate Compression (matching FEC's System.IO.Compression + Rebex.Zip) ──
+  // ── ZIP Container with Deflate Compression ──
 
   static createZipContainer(exportDir, outputPath, options = {}) {
     const compressionLevel = options.compressionLevel ?? 6;
