@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
@@ -9,9 +9,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let db;
 
+function getDataDir() {
+  if (process.env.SHERLOCKMAIL_DATA_DIR) return process.env.SHERLOCKMAIL_DATA_DIR;
+  return join(__dirname, '..', '..', 'data');
+}
+
 export function getDb() {
   if (!db) {
-    const dbPath = join(__dirname, '..', '..', 'data', 'fmc.sqlite');
+    const dataDir = getDataDir();
+    if (!existsSync(dataDir)) mkdirSync(dataDir, { recursive: true });
+    const dbPath = join(dataDir, 'fmc.sqlite');
     db = new DatabaseSync(dbPath);
     db.exec('PRAGMA journal_mode = WAL');
     db.exec('PRAGMA foreign_keys = ON');

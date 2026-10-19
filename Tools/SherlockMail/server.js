@@ -1,14 +1,104 @@
 import express from 'express';
-import { dirname, join } from 'path';
+import { dirname, join, isAbsolute, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { existsSync, mkdirSync } from 'fs';
+import { exec } from 'child_process';
 import apiRoutes from './src/api/routes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ── CLI Argument Parsing ──
+const args = process.argv.slice(2);
+
+function getArg(name, defaultValue) {
+  const i = args.indexOf(`--${name}`);
+  if (i >= 0 && i + 1 < args.length) return args[i + 1];
+  return defaultValue;
+}
+
+const PORT = parseInt(getArg('port', process.env.PORT || '3000'), 10);
+const NO_BROWSER = args.includes('--no-browser');
+const DATA_DIR = getArg('data-dir', null);
+
+if (args.includes('--help') || args.includes('-h')) {
+  console.log(`
+SherlockMail v0.9.0 — Forensic Email Collection Tool
+
+Usage: SherlockMail [options]
+       node server.js [options]
+
+Options:
+  --port <number>      HTTP port (default: 3000)
+  --data-dir <path>    Custom data directory for database and exports
+  --no-browser         Don't auto-open the browser on startup
+  --help, -h           Show this help message
+
+Examples:
+  SherlockMail.exe
+  SherlockMail.exe --port 8080
+  SherlockMail.exe --data-dir "C:\\Cases\\Evidence" --no-browser
+  node server.js --port 8080 --no-browser
+`);
+  process.exit(0);
+}
+
+if (DATA_DIR) {
+  process.env.SHERLOCKMAIL_DATA_DIR = resolve(DATA_DIR);
+}
+
+const dataDir = process.env.SHERLOCKMAIL_DATA_DIR || join(__dirname, 'data');
+if (!existsSync(dataDir)) {
+  mkdirSync(dataDir, { recursive: true });
+}
+
 const app = express();
-const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(join(__dirname, 'public')));
+
+// ── Folder Picker (cross-platform, no Electron required) ──
+app.post('/api/pick-folder', (req, res) => {
+  const platform = process.platform;
+  let cmd;
+
+  if (platform === 'win32') {
+    cmd = 'powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = \'Select Destination Folder\'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog() -eq \'OK\') { Write-Output $f.SelectedPath } else { Write-Output \'__CANCELLED__\' }"';
+  } else if (platform === 'darwin') {
+    cmd = 'osascript -e \'POSIX path of (choose folder with prompt "Select Destination Folder")\'';
+  } else {
+    cmd = 'zenity --file-selection --directory --title="Select Destination Folder" 2>/dev/null';
+  }
+
+  exec(cmd, { timeout: 120000 }, (err, stdout) => {
+    const result = (stdout || '').trim();
+    if (err || !result || result === '__CANCELLED__') {
+      return res.json({ canceled: true });
+    }
+    res.json({ path: result });
+  });
+});
+
+// ── Folder Opener (cross-platform, no Electron required) ──
+app.post('/api/open-folder', (req, res) => {
+  const folderPath = req.body.path;
+  if (!folderPath) return res.status(400).json({ error: 'No path provided' });
+
+  const resolved = isAbsolute(folderPath) ? folderPath : join(__dirname, folderPath);
+  if (!existsSync(resolved)) {
+    return res.status(404).json({ error: 'Folder does not exist yet — run an export first' });
+  }
+
+  const platform = process.platform;
+  try {
+    const escaped = resolved.replace(/"/g, '\\"');
+    if (platform === 'win32') exec(`explorer.exe "${escaped}"`);
+    else if (platform === 'darwin') exec(`open "${escaped}"`);
+    else exec(`xdg-open "${escaped}"`);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.use('/api', apiRoutes);
 
@@ -16,6 +106,31 @@ app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`SherlockMail running at http://localhost:${PORT}`);
+const server = app.listen(PORT, () => {
+  const url = `http://localhost:${PORT}`;
+  console.log('');
+  console.log('  SherlockMail v0.9.0 — Forensic Email Collection');
+  console.log(`  Running at ${url}`);
+  console.log(`  Data directory: ${dataDir}`);
+  console.log('  Press Ctrl+C to stop');
+  console.log('');
+
+  if (!NO_BROWSER) {
+    const platform = process.platform;
+    if (platform === 'win32') exec(`start "" "${url}"`);
+    else if (platform === 'darwin') exec(`open "${url}"`);
+    else exec(`xdg-open "${url}"`);
+  }
 });
+
+function shutdown() {
+  console.log('\nShutting down SherlockMail...');
+  server.close(() => {
+    console.log('Server closed.');
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 5000);
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
