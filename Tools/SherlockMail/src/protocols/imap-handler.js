@@ -92,7 +92,7 @@ export class ImapHandler {
       const uids = [];
       for await (const msg of this.client.fetch(query, { uid: true, envelope: true, bodyStructure: true, size: true, flags: true })) {
         uids.push(msg.uid);
-        if (limit && uids.length >= limit) break;
+        if (limit > 0 && uids.length >= limit) break;
       }
 
       for (const uid of uids) {

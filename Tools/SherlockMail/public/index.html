@@ -23,16 +23,7 @@
         <span>Sherlock<span class="logo-accent">Mail</span></span>
       </div>
 
-      <div class="nav-tabs">
-        <div class="nav-tab active" data-tab="projects" onclick="switchTab('projects')">Projects</div>
-        <div class="nav-tab" data-tab="tracker" onclick="switchTab('tracker')">Tracker</div>
-        <div class="nav-tab" data-tab="audit" onclick="switchTab('audit')">Chain of Custody</div>
-        <div class="nav-tab" data-tab="collect" onclick="switchTab('collect')">Collect</div>
-        <div class="nav-tab" data-tab="forensics" onclick="switchTab('forensics')">QC</div>
-        <div class="nav-tab" data-tab="export" onclick="switchTab('export')">Export</div>
-        <div class="nav-tab" data-tab="messages" onclick="switchTab('messages')">Review</div>
-        <div class="nav-tab" data-tab="guide" onclick="switchTab('guide')">Guide</div>
-      </div>
+      <div class="nav-tabs"></div>
 
       <div class="top-bar-right">
         <div class="search-bar">
@@ -50,29 +41,69 @@
 
     <!-- Main Content -->
     <div class="main-content">
-      <!-- Sidebar -->
-      <div class="sidebar">
-        <div class="sidebar-header">
-          <h3 id="sidebar-title">Projects</h3>
-          <button class="btn btn-sm btn-primary" onclick="switchTab('new-project')">+</button>
+      <!-- Left Nav Sidebar -->
+      <div class="left-nav">
+        <div class="left-nav-sections">
+          <div class="nav-section">
+            <div class="nav-main-tab active" data-group="projects" onclick="switchMainTab('projects')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              Projects
+            </div>
+            <div class="nav-sub-tabs" data-group="projects">
+              <div class="nav-sub-tab active" data-tab="projects" onclick="switchTab('projects')">All Projects</div>
+              <div class="nav-sub-tab" data-tab="tracker" onclick="switchTab('tracker')">Tracker</div>
+              <div class="nav-sub-tab" data-tab="audit" onclick="switchTab('audit')">Chain of Custody</div>
+            </div>
+          </div>
+          <div class="nav-section">
+            <div class="nav-main-tab" data-group="collection" onclick="switchMainTab('collection')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+              Collection
+            </div>
+            <div class="nav-sub-tabs" data-group="collection" style="display:none">
+              <div class="nav-sub-tab" data-tab="collect" onclick="switchTab('collect')">Collect</div>
+              <div class="nav-sub-tab" data-tab="forensics" onclick="switchTab('forensics')">QC</div>
+              <div class="nav-sub-tab" data-tab="export" onclick="switchTab('export')">Export</div>
+              <div class="nav-sub-tab" data-tab="messages" onclick="switchTab('messages')">Review</div>
+            </div>
+          </div>
+          <div class="nav-section">
+            <div class="nav-main-tab" data-group="guide" onclick="switchMainTab('guide'); switchTab('guide')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+              Guide
+            </div>
+          </div>
         </div>
-        <div class="sidebar-content" id="sidebar-content"></div>
-        <div class="sidebar-footer">
-          <span class="version">v0.9.0</span>
-          <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" id="theme-btn">
-            <svg id="theme-icon-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-            </svg>
-            <svg id="theme-icon-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
-              <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-            </svg>
-            <span id="theme-label">Dark</span>
-          </button>
+        <div class="left-nav-footer">
+          <button class="btn btn-primary btn-sm" onclick="switchTab('new-project')" style="width:100%;margin-bottom:8px">+ New Project</button>
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span class="version">v0.9.0</span>
+            <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" id="theme-btn">
+              <svg id="theme-icon-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+              </svg>
+              <svg id="theme-icon-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none">
+                <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+              </svg>
+              <span id="theme-label">Dark</span>
+            </button>
+          </div>
         </div>
       </div>
 
       <!-- Right Panel -->
       <div class="right-panel">
+        <!-- Projects List View -->
+        <div id="view-projects" class="panel-view visible">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+            <h2 style="margin:0">All Projects</h2>
+            <button class="btn btn-primary btn-sm" onclick="switchTab('new-project')">+ New Project</button>
+          </div>
+          <div id="projects-list-content">
+            <p style="color:var(--text-muted)">Loading projects...</p>
+          </div>
+        </div>
+
         <!-- Messages View -->
         <div id="view-messages" class="message-list-panel">
           <div class="message-list-header">
@@ -401,7 +432,7 @@
                     </div>
                     <div class="form-group">
                       <label id="wiz-pass-label">Password</label>
-                      <input type="password" id="wiz-password" placeholder="Enter password">
+                      <input type="password" id="wiz-password" placeholder="Enter password" autocomplete="off" data-lpignore="true">
                     </div>
                   </div>
                   <div class="form-group">
@@ -449,6 +480,13 @@
                         <button type="button" class="btn btn-secondary btn-sm" onclick="msSaveCredentials()">Save</button>
                       </div>
                     </div>
+                  </div>
+                </div>
+                <div id="wiz-ews-section" style="display:none;margin-bottom:16px">
+                  <div style="padding:16px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface)">
+                    <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Optional — leave blank for autodiscover or Office 365 default:</p>
+                    <input type="text" id="wiz-ews-url" placeholder="EWS URL (e.g. https://mail.contoso.com/EWS/Exchange.asmx)" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-input);color:var(--text);font-size:13px">
+                    <p style="font-size:11px;color:var(--text-muted);margin-top:6px">For on-prem Exchange: enter the server URL and use host/password fields above. For Office 365: use Microsoft OAuth above instead.</p>
                   </div>
                 </div>
                 <div id="wiz-zoho-oauth" style="display:none;margin-bottom:16px">
@@ -780,7 +818,7 @@
             <!-- Step 9: Transfer -->
             <div class="wizard-content" id="wiz-step-9">
               <h2>Step 9: Transfer</h2>
-              <p class="wizard-desc">Optionally transfer the collected data and exports to an external location.</p>
+              <p class="wizard-desc">Transfer collected data to an external location using Robocopy. Optionally zip the data with 7-Zip before or after transfer.</p>
               <div class="wizard-form">
                 <div class="wiz-section">
                   <div class="wiz-optional-badge">Optional</div>
@@ -799,6 +837,20 @@
                       </button>
                     </div>
                     <span class="form-hint">Enter the full path to the destination folder.</span>
+                  </div>
+                  <div class="form-group">
+                    <label>Transfer Mode</label>
+                    <select id="wiz-transfer-mode" onchange="wizToggleZipOptions()">
+                      <option value="unzipped">Unzipped (Robocopy folder copy)</option>
+                      <option value="zipped">Zipped (7-Zip archive)</option>
+                    </select>
+                  </div>
+                  <div id="wiz-zip-options" style="display:none">
+                    <div class="form-group">
+                      <label>Zip Password <span style="font-size:11px;opacity:0.6">(optional)</span></label>
+                      <input type="password" id="wiz-zip-password" placeholder="Leave blank for no password" autocomplete="off">
+                      <span class="form-hint">If set, the .7z archive will be password-protected (AES-256 encryption).</span>
+                    </div>
                   </div>
                   <div style="display:flex;gap:12px;align-items:center">
                     <button class="btn btn-primary" onclick="wizTransfer()">Transfer Collection</button>

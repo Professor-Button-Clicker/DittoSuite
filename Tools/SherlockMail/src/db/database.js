@@ -57,6 +57,8 @@ function migrate() {
   addCol('projects', 'evidence_description', 'TEXT');
   addCol('projects', 'client_name', 'TEXT');
   addCol('projects', 'client_matter_no', 'TEXT');
+  addCol('acquisitions', 'completion_type', 'TEXT');
+  addCol('acquisitions', 'session_dir', 'TEXT');
 }
 
 function rowToObj(row, columns) {
@@ -330,6 +332,7 @@ export function updateAcquisition(id, data) {
   const sets = [];
   const vals = [];
   if (data.status) { sets.push('status = ?'); vals.push(data.status); }
+  if (data.completionType) { sets.push('completion_type = ?'); vals.push(data.completionType); }
   if (data.totalMessages != null) { sets.push('total_messages = ?'); vals.push(data.totalMessages); }
   if (data.acquiredMessages != null) { sets.push('acquired_messages = ?'); vals.push(data.acquiredMessages); }
   if (data.failedMessages != null) { sets.push('failed_messages = ?'); vals.push(data.failedMessages); }
@@ -337,7 +340,8 @@ export function updateAcquisition(id, data) {
   if (data.skippedMessages != null) { sets.push('skipped_messages = ?'); vals.push(data.skippedMessages); }
   if (data.protocolLog) { sets.push('protocol_log = ?'); vals.push(JSON.stringify(data.protocolLog)); }
   if (data.errorLog) { sets.push('error_log = ?'); vals.push(JSON.stringify(data.errorLog)); }
-  if (data.status === 'completed' || data.status === 'failed') {
+  if (data.sessionDir) { sets.push('session_dir = ?'); vals.push(data.sessionDir); }
+  if (data.status === 'completed' || data.status === 'completed_with_errors' || data.status === 'failed') {
     sets.push('completed_at = ?'); vals.push(new Date().toISOString());
   }
   if (sets.length) {

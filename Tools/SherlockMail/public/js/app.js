@@ -10,11 +10,12 @@ let wizSelectedFolders = [];
 let wizCollectionId = null;
 let wizProgressTimer = null;
 let wizOutputDir = '';
+let wizSessionDir = '';
 
 // --- Init ---
 document.addEventListener('DOMContentLoaded', () => {
   loadSystemInfo();
-  loadProjects();
+  loadProjectsList();
   initTheme();
   wizBindFormatListeners();
 });
@@ -66,22 +67,40 @@ async function api(path, options = {}) {
 }
 
 // --- Navigation ---
+function switchMainTab(group) {
+  document.querySelectorAll('.nav-main-tab').forEach(t => t.classList.toggle('active', t.dataset.group === group));
+  document.querySelectorAll('.nav-sub-tabs').forEach(s => {
+    s.style.display = s.dataset.group === group ? '' : 'none';
+  });
+  // Auto-select first sub-tab if none active in this group
+  const subTabs = document.querySelector(`.nav-sub-tabs[data-group="${group}"]`);
+  if (subTabs) {
+    const activeSub = subTabs.querySelector('.nav-sub-tab.active');
+    if (!activeSub) {
+      const first = subTabs.querySelector('.nav-sub-tab');
+      if (first) first.click();
+    }
+  }
+}
+
 function switchTab(tab) {
   currentTab = tab;
-  document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  // Update sub-tab highlights
+  document.querySelectorAll('.nav-sub-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
 
   // Hide all panel views
   document.querySelectorAll('.panel-view').forEach(p => p.classList.remove('visible'));
 
   // Handle message-list-panel (always-present flex container) vs panel-view overlays
   const msgPanel = document.getElementById('view-messages');
-  const panelViews = ['new-project', 'project-detail', 'search', 'tracker', 'audit', 'collect', 'export', 'forensics', 'guide'];
+  const panelViews = ['new-project', 'project-detail', 'search', 'tracker', 'audit', 'collect', 'export', 'forensics', 'guide', 'projects'];
 
   if (panelViews.includes(tab)) {
     const target = document.getElementById(`view-${tab}`);
     if (target) target.classList.add('visible');
   }
 
+  if (tab === 'projects') loadProjectsList();
   if (tab === 'tracker') loadProjectsTracker();
   if (tab === 'audit' && currentProject) loadAuditLog();
   if (tab === 'search') document.getElementById('adv-search-input')?.focus();
@@ -90,17 +109,46 @@ function switchTab(tab) {
   if (tab === 'export' && currentProject) loadExportHistory();
   if (tab === 'forensics' && !currentProject) toast('Select a project first');
 
-  updateSidebar();
+  // Expand the correct main tab group
+  const tabGroups = { projects: 'projects', tracker: 'projects', audit: 'projects', 'new-project': 'projects', 'project-detail': 'projects',
+    collect: 'collection', forensics: 'collection', export: 'collection', messages: 'collection', guide: 'guide' };
+  const group = tabGroups[tab];
+  if (group) {
+    document.querySelectorAll('.nav-main-tab').forEach(t => t.classList.toggle('active', t.dataset.group === group));
+    document.querySelectorAll('.nav-sub-tabs').forEach(s => {
+      s.style.display = s.dataset.group === group ? '' : 'none';
+    });
+  }
 }
 
-function updateSidebar() {
-  const title = document.getElementById('sidebar-title');
-  if ((currentTab === 'messages' || currentTab === 'projects') && currentProject) {
-    title.textContent = 'Folders';
-    loadFolders();
-  } else {
-    title.textContent = 'Projects';
-    loadProjects();
+// --- Projects List (main panel) ---
+async function loadProjectsList() {
+  const container = document.getElementById('projects-list-content');
+  if (!container) return;
+  try {
+    const projects = await api('/projects');
+    if (!projects.length) {
+      container.innerHTML = `<div class="empty-state" style="padding:40px"><h3>No projects yet</h3><p>Create a new project to begin forensic email collection.</p></div>`;
+      return;
+    }
+    container.innerHTML = projects.map(p => {
+      const status = p.status || 'created';
+      const statusClass = status === 'completed' ? 'success' : status === 'error' ? 'danger' : status === 'collecting' ? 'accent' : 'muted';
+      return `<div class="project-list-card" onclick="selectProject('${p.id}')" style="padding:14px 16px;background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:8px;cursor:pointer;transition:all var(--transition)">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-weight:600;font-size:14px;margin-bottom:2px">${esc(p.name)}</div>
+            <div style="font-size:12px;color:var(--text-muted)">${esc(p.target_email || p.targetEmail || '')} &bull; ${esc((p.provider_type || p.providerType || '').toUpperCase())}</div>
+          </div>
+          <div style="text-align:right">
+            <span class="project-status" style="font-size:11px;color:var(--${statusClass})">${esc(status)}</span>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${p.case_id || p.caseId || ''}</div>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch {
+    container.innerHTML = '<p style="color:var(--danger)">Failed to load projects.</p>';
   }
 }
 
@@ -477,6 +525,15 @@ function prefillCollectWizard(project) {
 
   const email = project.target_email || project.targetEmail || '';
   document.getElementById('wiz-email').value = email;
+
+  // Never prefill passwords
+  const passField = document.getElementById('wiz-password');
+  if (passField) passField.value = '';
+
+  // Clear stale folder list
+  const foldersEl = document.getElementById('wiz-folders-list');
+  if (foldersEl) foldersEl.innerHTML = '<div style="padding:20px;color:var(--text-muted)">Connect and load folders in Step 4.</div>';
+  wizFolders = [];
 
   if (email && email.includes('@')) {
     const domain = email.split('@')[1].toLowerCase();
@@ -888,7 +945,6 @@ async function runCombinedQC() {
         checks.push({ name: `Export: ${exp.format?.toUpperCase() || 'Unknown'}`, status: valid ? 'pass' : 'fail', detail: exp.error || 'Files verified' });
       }
     }
-    checks.push({ name: 'RFC 3161 Timestamps', status: (integrity.timestampRecords || 0) > 0 ? 'pass' : 'warning', detail: `${integrity.timestampRecords || 0} timestamp record(s) on file` });
     for (const c of checks) { if (c.status === 'pass') totalPass++; else if (c.status === 'warning') totalWarn++; else totalFail++; }
     const worstStatus = checks.some(c => c.status === 'fail') ? 'fail' : checks.some(c => c.status === 'warning') ? 'warning' : 'pass';
     sections.push({ title: 'Evidence Integrity', status: worstStatus, checks });
@@ -1926,20 +1982,25 @@ function wizUpdateProtocolFields() {
   const zohoOAuth = document.getElementById('wiz-zoho-oauth');
   const fmAuth = document.getElementById('wiz-fastmail-auth');
 
-  const apiProtocols = ['ews', 'graph', 'gmail_api', 'zoho_api', 'jmap'];
+  const apiProtocols = ['graph', 'gmail_api', 'zoho_api', 'jmap'];
   if (apiProtocols.includes(protocol)) {
     fields.style.display = 'none';
+  } else if (protocol === 'ews') {
+    fields.style.display = '';
   } else {
     fields.style.display = '';
   }
 
+  const ewsSection = document.getElementById('wiz-ews-section');
+  if (ewsSection) ewsSection.style.display = protocol === 'ews' ? '' : 'none';
+
   gmailOAuth.style.display = protocol === 'gmail_api' ? '' : 'none';
-  msOAuth.style.display = protocol === 'graph' ? '' : 'none';
+  msOAuth.style.display = (protocol === 'graph' || protocol === 'ews') ? '' : 'none';
   zohoOAuth.style.display = protocol === 'zoho_api' ? '' : 'none';
   fmAuth.style.display = protocol === 'jmap' ? '' : 'none';
 
   if (protocol === 'gmail_api') gmailCheckStatus();
-  if (protocol === 'graph') msCheckStatus();
+  if (protocol === 'graph' || protocol === 'ews') msCheckStatus();
   if (protocol === 'zoho_api') zohoCheckStatus();
   if (protocol === 'jmap') fmCheckStatus();
 }
@@ -1962,6 +2023,13 @@ function wizSaveConnection() {
     wizConnection.username = document.getElementById('wiz-username')?.value || wizConnection.email;
     wizConnection.tls = document.getElementById('wiz-tls')?.checked !== false;
     wizConnection.password = password;
+  }
+
+  if (protocol === 'ews') {
+    const ewsUrl = document.getElementById('wiz-ews-url')?.value;
+    if (ewsUrl) wizConnection.ewsUrl = ewsUrl;
+    wizConnection.authType = authMethod;
+    if (authMethod === 'password' && password) wizConnection.password = password;
   }
 }
 
@@ -2147,6 +2215,45 @@ async function wizStartCollection() {
 
   wizGoToStep(6);
 
+  let progressInterval = null;
+
+  function updateProgressUI(p) {
+    const fill = document.getElementById('wiz-progress-fill');
+    const label = document.getElementById('wiz-progress-label');
+    const stats = document.getElementById('wiz-progress-stats');
+    if (!fill || !label) return;
+
+    const total = p.total || 0;
+    const done = (p.acquired || 0) + (p.failed || 0) + (p.skipped || 0);
+    const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    fill.style.width = pct + '%';
+
+    let statusText = '';
+    if (p.phase === 'connecting') statusText = 'Connecting to mail server...';
+    else if (p.phase === 'retrying_failed') statusText = 'Retrying failed messages...';
+    else if (p.phase === 'finalizing') statusText = 'Finalizing collection...';
+    else if (p.retrying) statusText = `Retrying: ${p.retryItem || 'failed message'}...`;
+    else if (p.phase === 'collecting') statusText = `Collecting${p.currentFolder ? ' from ' + p.currentFolder : ''}... ${done}/${total} (${pct}%)`;
+    else statusText = `${pct}%`;
+
+    label.textContent = statusText;
+
+    if (stats) {
+      stats.innerHTML = `
+        <div class="wiz-stat"><span>Acquired</span><strong>${p.acquired || 0}</strong></div>
+        <div class="wiz-stat"><span>Failed</span><strong style="${p.failed > 0 ? 'color:var(--danger)' : ''}">${p.failed || 0}</strong></div>
+        <div class="wiz-stat"><span>Skipped</span><strong>${p.skipped || 0}</strong></div>
+      `;
+    }
+  }
+
+  progressInterval = setInterval(async () => {
+    try {
+      const p = await api(`/projects/${currentProject.id}/collect/progress`);
+      if (p && p.active !== undefined) updateProgressUI(p);
+    } catch (_) {}
+  }, 500);
+
   try {
     const result = await api(`/projects/${currentProject.id}/collect`, {
       method: 'POST',
@@ -2157,14 +2264,37 @@ async function wizStartCollection() {
       }
     });
 
+    clearInterval(progressInterval);
+
     document.getElementById('wiz-progress-fill').style.width = '100%';
     document.getElementById('wiz-progress-fill').classList.add('complete');
-    document.getElementById('wiz-progress-label').textContent = 'Collection complete!';
+    const completionLabels = {
+      'completed_without_errors': 'Complete',
+      'completed_with_errors_download_complete': 'Complete (with errors)',
+      'completed_with_errors_remaining_items': 'Complete (items remaining)',
+      'no_items_found': 'No items found',
+      'canceled': 'Canceled',
+    };
+    const completionLabel = completionLabels[result.completionType] || 'Collection complete!';
+    const failedMsg = result.failedCount > 0 ? ` — ${result.failedCount} failed` : '';
+    document.getElementById('wiz-progress-label').textContent = completionLabel + failedMsg;
     document.getElementById('wiz-progress-stats').innerHTML = `
       <div class="wiz-stat"><span>Acquired</span><strong>${result.messageCount}</strong></div>
       <div class="wiz-stat"><span>Skipped</span><strong>${result.skippedCount || 0}</strong></div>
+      <div class="wiz-stat"><span>Failed</span><strong style="${result.failedCount > 0 ? 'color:var(--danger)' : ''}">${result.failedCount || 0}</strong></div>
       <div class="wiz-stat"><span>Size</span><strong>${formatBytes(result.totalBytes)}</strong></div>
     `;
+
+    if (result.errors && result.errors.length > 0) {
+      const errEl = document.getElementById('wiz-progress-errors') || document.getElementById('wiz-results-errors');
+      if (errEl) {
+        errEl.innerHTML = `<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--danger);font-size:13px">${result.errors.length} error(s) during collection</summary>
+          <ul style="font-size:12px;margin:8px 0;max-height:200px;overflow:auto">${result.errors.map(e => `<li>${esc(e.folder || e.index || '')} — ${esc(e.error)}</li>`).join('')}</ul>
+        </details>`;
+      }
+    }
+
+    wizSessionDir = result.sessionDir || '';
 
     setTimeout(async () => {
       wizShowResults(result);
@@ -2196,6 +2326,7 @@ async function wizStartCollection() {
       }
     }, 1500);
   } catch (err) {
+    clearInterval(progressInterval);
     document.getElementById('wiz-progress-label').innerHTML =
       `<span class="verify-fail">Failed to collect: ${esc(err.message)}</span>`;
   }
@@ -2203,38 +2334,62 @@ async function wizStartCollection() {
 
 function wizShowResults(result) {
   const el = document.getElementById('wiz-results-content');
+  const completionLabels = {
+    'completed_without_errors': 'Completed Without Errors',
+    'completed_with_errors_download_complete': 'Completed With Errors (Download Complete)',
+    'completed_with_errors_remaining_items': 'Completed With Errors (Remaining Items)',
+    'no_items_found': 'No Items Found',
+    'canceled': 'Canceled',
+  };
+  const completionLabel = completionLabels[result.completionType] || result.status || 'completed';
 
   el.innerHTML = `
     <div class="stats-grid">
       <div class="stat-card"><div class="stat-label">Messages Acquired</div><div class="stat-value">${result.messageCount}</div></div>
       <div class="stat-card"><div class="stat-label">Skipped</div><div class="stat-value">${result.skippedCount || 0}</div></div>
       <div class="stat-card"><div class="stat-label">Total Size</div><div class="stat-value" style="font-size:20px">${formatBytes(result.totalBytes)}</div></div>
-      <div class="stat-card"><div class="stat-label">Differential</div><div class="stat-value" style="font-size:16px">${result.differential ? 'YES' : 'NO'}</div></div>
+      <div class="stat-card"><div class="stat-label">Status</div><div class="stat-value" style="font-size:14px">${esc(completionLabel)}</div></div>
     </div>
-    ${result.timestamp ? `
+    ${result.sessionDir ? `
       <div style="margin-top:16px;padding:12px;background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--radius)">
+        <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px">Session Output</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span style="font-size:12px;color:var(--text-muted)">MIME:</span>
+          <code style="font-size:11px;color:var(--accent)">${esc(result.mimeOutputDir || '')}</code>
+        </div>
+        ${result.logFiles && result.logFiles.length > 0 ? `
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:12px;color:var(--text-muted)">Logs:</span>
+            <span style="font-size:11px;color:var(--text-secondary)">${result.logFiles.join(', ')}</span>
+          </div>
+        ` : ''}
+      </div>
+    ` : ''}
+    ${result.timestamp ? `
+      <div style="margin-top:12px;padding:12px;background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--radius)">
         <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase">RFC 3161 Timestamp</div>
         <div style="font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-top:4px">${esc(result.timestamp)}</div>
       </div>
     ` : ''}
   `;
 
-  const srcDir = wizOutputDir || `./data/exports/${currentProject?.id || ''}`;
+  const srcDir = result.sessionDir || wizOutputDir || `./data/exports/${currentProject?.id || ''}`;
   const transferSrc = document.getElementById('wiz-transfer-source');
   if (transferSrc) transferSrc.value = srcDir;
 
   const errEl = document.getElementById('wiz-results-errors');
+  const statusColor = result.failedCount > 0 ? 'var(--warning)' : 'var(--success)';
   errEl.innerHTML = `<div style="display:flex;align-items:center;gap:12px">
-    <p style="color:var(--success);font-weight:600;margin:0">Collection completed successfully.</p>
+    <p style="color:${statusColor};font-weight:600;margin:0">${esc(completionLabel)}</p>
     <button class="btn btn-secondary" onclick="wizOpenOutputFolder()" style="white-space:nowrap;padding:6px 14px;font-size:13px">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;vertical-align:middle;margin-right:4px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-      Open Folder
+      Open Session Folder
     </button>
   </div>`;
 }
 
 async function wizOpenOutputFolder() {
-  const folderPath = wizOutputDir || `./data/exports/${currentProject?.id || ''}`;
+  const folderPath = wizSessionDir || wizOutputDir || `./data/exports/${currentProject?.id || ''}`;
   try {
     await api('/open-folder', { method: 'POST', body: { path: folderPath } });
   } catch (err) {
@@ -2315,12 +2470,44 @@ async function wizAutoExport() {
   return results;
 }
 
+function wizToggleZipOptions() {
+  const mode = document.getElementById('wiz-transfer-mode').value;
+  document.getElementById('wiz-zip-options').style.display = mode === 'zipped' ? '' : 'none';
+}
+
 async function wizTransfer() {
+  const src = document.getElementById('wiz-transfer-source').value;
   const dest = document.getElementById('wiz-transfer-dest').value;
   if (!dest) { toast('Enter a destination directory'); return; }
+  if (!src) { toast('No source directory — run collection first'); return; }
 
+  const mode = document.getElementById('wiz-transfer-mode').value;
+  const zipPassword = document.getElementById('wiz-zip-password')?.value || '';
   const statusEl = document.getElementById('wiz-transfer-status');
-  statusEl.innerHTML = '<span style="color:var(--warning)">Transfer is a local operation — use OS file copy tools for production transfers.</span>';
+  const resultEl = document.getElementById('wiz-transfer-result');
+  statusEl.innerHTML = '<span style="color:var(--accent)">Transferring...</span>';
+  resultEl.innerHTML = '';
+
+  try {
+    const result = await api(`/projects/${currentProject.id}/transfer`, {
+      method: 'POST',
+      body: { source: src, destination: dest, mode, zipPassword: mode === 'zipped' ? zipPassword : undefined }
+    });
+
+    statusEl.innerHTML = '<span class="verify-pass">Transfer complete</span>';
+    let html = '<div class="stats-grid">';
+    if (result.filesCopied !== undefined) html += `<div class="stat-card"><div class="stat-label">Files Copied</div><div class="stat-value">${result.filesCopied}</div></div>`;
+    if (result.totalBytes !== undefined) html += `<div class="stat-card"><div class="stat-label">Size</div><div class="stat-value" style="font-size:18px">${formatBytes(result.totalBytes)}</div></div>`;
+    if (result.archivePath) html += `<div class="stat-card"><div class="stat-label">Archive</div><div class="stat-value" style="font-size:13px;word-break:break-all">${esc(result.archivePath)}</div></div>`;
+    if (result.encrypted) html += `<div class="stat-card"><div class="stat-label">Encrypted</div><div class="stat-value">AES-256</div></div>`;
+    html += '</div>';
+    if (result.log && result.log.length > 0) {
+      html += `<details style="margin-top:12px"><summary style="cursor:pointer;font-size:13px">Transfer Log</summary><pre style="font-size:11px;max-height:200px;overflow:auto;margin:8px 0;padding:8px;background:var(--bg-raised);border-radius:var(--radius)">${esc(result.log.join('\n'))}</pre></details>`;
+    }
+    resultEl.innerHTML = html;
+  } catch (err) {
+    statusEl.innerHTML = `<span class="verify-fail">Transfer failed: ${esc(err.message)}</span>`;
+  }
 }
 
 function wizResetState() {
@@ -2328,6 +2515,7 @@ function wizResetState() {
   wizFolders = [];
   wizSelectedFolders = [];
   wizOutputDir = '';
+  wizSessionDir = '';
   if (wizProgressTimer) { clearInterval(wizProgressTimer); wizProgressTimer = null; }
   const fill = document.getElementById('wiz-progress-fill');
   if (fill) { fill.style.width = '0%'; fill.classList.remove('complete'); }

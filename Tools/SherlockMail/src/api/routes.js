@@ -2,7 +2,11 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { fileURLToPath } from 'url';
+
+const execFileAsync = promisify(execFile);
 import {
   createProject, getProjects, getProjectsSummary, getProject, deleteProject, updateProjectStatus, updateProject,
   saveFolders, getFolders, createAcquisition, saveMessage, getMessages, getMessageCount,
@@ -34,7 +38,7 @@ import {
 } from '../services/google-oauth.js';
 import {
   getAuthStatus as msGetAuthStatus, getAuthUrl as msGetAuthUrl,
-  saveCredentials as msSaveCredentials,
+  saveCredentials as msSaveCredentials, getAccessToken as msGetAccessToken,
   startCallbackServer as msStartCallbackServer, waitForAuth as msWaitForAuth,
   stopCallbackServer as msStopCallbackServer, revokeTokens as msRevokeTokens,
 } from '../services/microsoft-oauth.js';
@@ -95,6 +99,162 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.SHERLOCKMAIL_DATA_DIR || path.join(__dirname, '..', '..', 'data');
 
 const router = Router();
+
+// ── FEC-Pattern Helpers ──
+
+function sanitizeFolderName(folderPath) {
+  return folderPath.replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim() || 'INBOX';
+}
+
+function createSessionOutputDir(projectId, sessionName) {
+  const sessionDir = path.join(DATA_DIR, 'projects', projectId, 'sessions', sessionName);
+  const mimeDir = path.join(sessionDir, 'MIME');
+  const logsDir = path.join(sessionDir, 'Logs');
+  fs.mkdirSync(mimeDir, { recursive: true });
+  fs.mkdirSync(logsDir, { recursive: true });
+  return { sessionDir, mimeDir, logsDir };
+}
+
+function writeEmlFile(mimeDir, folderName, msg, folderMsgIndex, maxPerSubfolder = 5000) {
+  const sanitized = sanitizeFolderName(folderName);
+  let targetDir;
+  if (maxPerSubfolder > 0 && folderMsgIndex >= maxPerSubfolder) {
+    const subfolderIndex = Math.floor(folderMsgIndex / maxPerSubfolder) + 1;
+    targetDir = path.join(mimeDir, sanitized, `Part_${subfolderIndex}`);
+  } else {
+    targetDir = path.join(mimeDir, sanitized);
+  }
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  const uid = msg.uid || 'unknown';
+  const safeSubject = (msg.subject || 'no_subject').slice(0, 50).replace(/[<>:"/\\|?*\r\n]/g, '_');
+  const filename = `${uid}_${safeSubject}.eml`;
+  const filePath = path.join(targetDir, filename);
+
+  let rawBuffer;
+  if (msg.rawMime && Buffer.isBuffer(msg.rawMime)) {
+    rawBuffer = msg.rawMime;
+  } else if (msg.rawSource) {
+    rawBuffer = Buffer.from(msg.rawSource, 'base64');
+  } else {
+    const headers = [
+      `From: ${msg.fromAddress || ''}`,
+      `To: ${(msg.toAddresses || []).join(', ')}`,
+      `Subject: ${msg.subject || ''}`,
+      `Date: ${msg.date || new Date().toISOString()}`,
+      `Message-ID: ${msg.messageId || ''}`,
+      `Content-Type: ${msg.contentType || 'text/plain'}`,
+    ].join('\r\n');
+    rawBuffer = Buffer.from(headers + '\r\n\r\n' + (msg.bodyText || ''));
+  }
+
+  fs.writeFileSync(filePath, rawBuffer);
+  const fileHash = crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+  return { filePath, fileHash, size: rawBuffer.length };
+}
+
+async function checkDiskSpace(targetPath, minFreeBytes = 500 * 1024 * 1024) {
+  const drive = path.parse(path.resolve(targetPath)).root.replace('\\', '');
+  try {
+    const { stdout } = await execFileAsync('wmic', [
+      'logicaldisk', 'where', `DeviceID='${drive}'`, 'get', 'FreeSpace', '/format:value'
+    ], { timeout: 5000 });
+    const match = stdout.match(/FreeSpace=(\d+)/);
+    if (match) {
+      const freeBytes = parseInt(match[1]);
+      return { ok: freeBytes > minFreeBytes, freeBytes, drive, minFreeBytes };
+    }
+  } catch {}
+  return { ok: true, freeBytes: -1, drive, note: 'Could not determine disk space' };
+}
+
+function writeAcquisitionLogs(logsDir, sessionName, ad) {
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+
+  const acqLog = [
+    `SherlockMail Acquisition Log`,
+    `Session: ${sessionName}`,
+    `Started: ${ad.startedAt}`,
+    `Completed: ${new Date().toISOString()}`,
+    `Protocol: ${ad.protocol}`,
+    `Target: ${ad.targetEmail}`,
+    ``,
+    `Results:`,
+    `  Total messages found: ${ad.totalFound}`,
+    `  Downloaded: ${ad.acquired}`,
+    `  Skipped (differential): ${ad.skipped}`,
+    `  Failed: ${ad.failed}`,
+    `  Total bytes: ${ad.totalBytes}`,
+    ``,
+    `Folders:`,
+    ...Object.entries(ad.folderStats || {}).map(([f, s]) =>
+      `  ${f}: ${s.acquired} acquired, ${s.skipped} skipped, ${s.failed} failed`
+    ),
+    ``,
+    `Completion: ${ad.completionType}`,
+  ];
+  fs.writeFileSync(path.join(logsDir, `acquisition_log_${ts}.txt`), acqLog.join('\n'));
+
+  if (ad.errors.length > 0) {
+    const errLog = [
+      `SherlockMail Exception Log — Session: ${sessionName}`,
+      `Generated: ${new Date().toISOString()}`,
+      ``,
+      ...ad.errors.map((e, i) =>
+        `[${i + 1}] ${e.timestamp || ''} | ${e.folder || ''} | ${e.type || 'error'} | ${e.messageId || ''} | ${e.error}`
+      ),
+    ];
+    fs.writeFileSync(path.join(logsDir, `exception_log_${ts}.txt`), errLog.join('\n'));
+  }
+
+  if (ad.downloadedItems.length > 0) {
+    const hdr = 'UID,MessageId,Folder,Subject,From,Date,Size,HashSHA256,EmlPath';
+    const rows = ad.downloadedItems.map(m =>
+      [m.uid, m.messageId, m.folder, `"${(m.subject || '').replace(/"/g, '""')}"`,
+       m.fromAddress, m.date, m.size, m.hashSha256, m.emlPath || ''].join(',')
+    );
+    fs.writeFileSync(path.join(logsDir, `downloaded_items_${ts}.csv`), [hdr, ...rows].join('\n'));
+  }
+
+  const remainingErrs = ad.errors.filter(e => e.type === 'message_fetch_error');
+  if (remainingErrs.length > 0) {
+    const hdr = 'MessageId,Folder,Subject,Error,Timestamp';
+    const rows = remainingErrs.map(e =>
+      [e.messageId || '', e.folder || '', `"${(e.subject || '').replace(/"/g, '""')}"`,
+       `"${e.error}"`, e.timestamp].join(',')
+    );
+    fs.writeFileSync(path.join(logsDir, `remaining_items_${ts}.csv`), [hdr, ...rows].join('\n'));
+  }
+
+  if (ad.differentialExclusions.length > 0) {
+    const hdr = 'MessageId,HashSHA256,Folder,Reason';
+    const rows = ad.differentialExclusions.map(e =>
+      [e.messageId || '', e.hashSha256 || '', e.folder || '', 'duplicate'].join(',')
+    );
+    fs.writeFileSync(path.join(logsDir, `differential_excluded_${ts}.csv`), [hdr, ...rows].join('\n'));
+  }
+
+  return { logsDir, files: fs.readdirSync(logsDir) };
+}
+
+function determineCompletionType(acquired, failed, skipped, total, canceled = false) {
+  if (canceled) return 'canceled';
+  if (total === 0) return 'no_items_found';
+  if (failed === 0) return 'completed_without_errors';
+  if (acquired > 0 && failed > 0 && (acquired + skipped + failed >= total))
+    return 'completed_with_errors_download_complete';
+  if (failed > 0) return 'completed_with_errors_remaining_items';
+  return 'completed_without_errors';
+}
+
+// ── Collection Progress Tracking ──
+const collectionProgress = new Map();
+
+router.get('/projects/:id/collect/progress', (req, res) => {
+  const progress = collectionProgress.get(req.params.id);
+  if (!progress) return res.json({ active: false });
+  res.json(progress);
+});
 
 // ── Dashboard Stats ──
 router.get('/stats', (req, res) => {
@@ -442,13 +602,19 @@ router.post('/connect/test', async (req, res) => {
         res.json({ ...result, messages: msgList, protocolLog: handler.getProtocolLog() });
         return;
 
-      case 'ews':
-        handler = new EwsHandler(config);
+      case 'ews': {
+        const ewsConfig = { ...config };
+        if (!ewsConfig.password && msGetAuthStatus().authorized) {
+          ewsConfig.authType = 'oauth2';
+          ewsConfig.accessToken = await msGetAccessToken();
+        }
+        handler = new EwsHandler(ewsConfig);
         result = await handler.connect();
         const ewsFolders = await handler.listFolders();
         await handler.disconnect();
         res.json({ ...result, folders: ewsFolders, protocolLog: handler.getProtocolLog() });
         return;
+      }
 
       case 'graph':
         handler = new GraphHandler(config);
@@ -486,7 +652,12 @@ router.post('/connect/test', async (req, res) => {
         res.status(400).json({ error: `Unknown protocol: ${protocol}` });
     }
   } catch (err) {
-    res.status(500).json({ error: err.message, protocolLog: [] });
+    let errorMsg = err.message;
+    const host = (config?.host || '').toLowerCase();
+    if (/auth|login|credential|command/i.test(errorMsg) && /aol|yahoo/.test(host)) {
+      errorMsg += '. AOL/Yahoo requires an app-specific password — generate one in your account security settings and select "App-Specific Password" as auth method.';
+    }
+    res.status(500).json({ error: errorMsg, protocolLog: [] });
   }
 });
 
@@ -517,19 +688,39 @@ async function retryWithBackoff(fn, retries = MAX_RETRIES) {
   }
 }
 
-function processMessageItem(msg, projectId, acquisitionId, existingIds, differential, errors) {
+function processMessageItem(msg, projectId, acquisitionId, existingIds, differential, errors, opts = {}) {
+  const { mimeDir, folderMsgCounters, differentialExclusions, downloadedItems } = opts;
+
   const isDuplicate = differential && (existingIds.has(msg.messageId) || existingIds.has(msg.hashSha256));
-  if (isDuplicate) return 'skipped';
+  if (isDuplicate) {
+    if (differentialExclusions) {
+      differentialExclusions.push({ messageId: msg.messageId, hashSha256: msg.hashSha256, folder: msg.folder });
+    }
+    return 'skipped';
+  }
 
   try {
     msg.projectId = projectId;
     msg.acquisitionId = acquisitionId;
+
+    if (mimeDir && folderMsgCounters) {
+      const folderName = msg.folder || 'INBOX';
+      if (folderMsgCounters[folderName] === undefined) folderMsgCounters[folderName] = 0;
+      const { filePath } = writeEmlFile(mimeDir, folderName, msg, folderMsgCounters[folderName]);
+      msg.emlPath = filePath;
+      folderMsgCounters[folderName]++;
+    }
+
+    delete msg.rawSource;
+    delete msg.rawMime;
+
     saveMessage(msg);
     if (msg.attachments) {
       for (const att of msg.attachments) {
         saveAttachment({ ...att, messageId: msg.id });
       }
     }
+    if (downloadedItems) downloadedItems.push(msg);
     return 'acquired';
   } catch (err) {
     errors.push({
@@ -548,10 +739,26 @@ router.post('/projects/:id/collect', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
   const { folders: selectedFolders, searchQuery, config, differential } = req.body;
-  const limit = req.body.limit || 50;
+  const limit = req.body.limit || 0;
   const batchSize = req.body.batchSize || 500;
   const acquisitionId = createAcquisition(project.id, selectedFolders);
   updateProjectStatus(project.id, 'collecting');
+
+  const sessionName = `${(project.name || project.id).replace(/[<>:"/\\|?*]/g, '_')}_${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  const { sessionDir, mimeDir, logsDir } = createSessionOutputDir(project.id, sessionName);
+
+  const diskCheck = await checkDiskSpace(DATA_DIR);
+  if (!diskCheck.ok) {
+    updateProjectStatus(project.id, 'error');
+    return res.status(507).json({
+      error: `Insufficient disk space on ${diskCheck.drive}: ${Math.round(diskCheck.freeBytes / 1024 / 1024)} MB free, need ${Math.round(diskCheck.minFreeBytes / 1024 / 1024)} MB`,
+      freeBytes: diskCheck.freeBytes,
+    });
+  }
+
+  const progress = { active: true, phase: 'connecting', acquired: 0, failed: 0, skipped: 0, total: 0, retrying: false, retryItem: '', currentFolder: '', errors: [], sessionDir };
+  collectionProgress.set(project.id, progress);
+  const startedAt = new Date().toISOString();
 
   try {
     let handler;
@@ -561,6 +768,9 @@ router.post('/projects/:id/collect', async (req, res) => {
     const errors = [];
     const targetFolders = selectedFolders || ['INBOX'];
     const folderStats = {};
+    const downloadedItems = [];
+    const differentialExclusions = [];
+    const folderMsgCounters = {};
 
     const existingIds = new Set();
     if (differential) {
@@ -571,27 +781,42 @@ router.post('/projects/:id/collect', async (req, res) => {
       }
     }
 
+    const processAndTrack = (msg, folder) => {
+      msg.folder = msg.folder || folder;
+      const result = processMessageItem(msg, project.id, acquisitionId, existingIds, differential, errors, {
+        mimeDir, folderMsgCounters, differentialExclusions, downloadedItems,
+      });
+      if (result === 'skipped') { skippedCount++; progress.skipped++; }
+      else if (result === 'failed') { failedCount++; progress.failed++; }
+      else { allMessages.push(msg); progress.acquired++; }
+      return result;
+    };
+
     switch (project.provider_type) {
       case 'imap': {
         if (!config?.host) throw new Error('IMAP host is required');
         handler = new ImapHandler(config);
+        progress.phase = 'connecting';
         await retryWithBackoff(() => handler.connect());
+        progress.phase = 'collecting';
 
         for (const folder of targetFolders) {
           const stats = { acquired: 0, skipped: 0, failed: 0 };
+          progress.currentFolder = folder;
           try {
             const messages = await retryWithBackoff(() =>
               handler.fetchMessages(folder, { limit, searchCriteria: searchQuery })
             );
+            progress.total += messages.length;
             for (const msg of messages) {
-              msg.folder = msg.folder || folder;
-              const result = processMessageItem(msg, project.id, acquisitionId, existingIds, differential, errors);
-              if (result === 'skipped') { skippedCount++; stats.skipped++; }
-              else if (result === 'failed') { failedCount++; stats.failed++; }
-              else { allMessages.push(msg); stats.acquired++; }
+              const result = processAndTrack(msg, folder);
+              if (result === 'skipped') stats.skipped++;
+              else if (result === 'failed') stats.failed++;
+              else stats.acquired++;
             }
           } catch (folderErr) {
             errors.push({ folder, error: folderErr.message, timestamp: new Date().toISOString(), type: 'folder_error' });
+            progress.errors.push(`${folder}: ${folderErr.message}`);
           }
           folderStats[folder] = stats;
         }
@@ -603,24 +828,40 @@ router.post('/projects/:id/collect', async (req, res) => {
       case 'pop3': {
         if (!config?.host) throw new Error('POP3 host is required');
         handler = new Pop3Handler(config);
+        progress.phase = 'connecting';
         await retryWithBackoff(() => handler.connect());
+        progress.phase = 'collecting';
 
         const msgList = await handler.listMessages();
-        const fetchCount = Math.min(msgList.length, limit);
+        const fetchCount = limit > 0 ? Math.min(msgList.length, limit) : msgList.length;
         const stats = { acquired: 0, skipped: 0, failed: 0 };
+        progress.total = fetchCount;
 
         for (let i = 0; i < fetchCount; i++) {
           try {
             const msg = await retryWithBackoff(() => handler.fetchMessage(msgList[i].number));
-            msg.folder = msg.folder || 'INBOX';
-            const result = processMessageItem(msg, project.id, acquisitionId, existingIds, differential, errors);
-            if (result === 'skipped') { skippedCount++; stats.skipped++; }
-            else if (result === 'failed') { failedCount++; stats.failed++; }
-            else { allMessages.push(msg); stats.acquired++; }
+            const result = processAndTrack(msg, 'INBOX');
+            if (result === 'skipped') stats.skipped++;
+            else if (result === 'failed') stats.failed++;
+            else stats.acquired++;
           } catch (msgErr) {
-            failedCount++;
-            stats.failed++;
-            errors.push({ index: i, error: msgErr.message, timestamp: new Date().toISOString(), type: 'message_fetch_error' });
+            // Retry once
+            progress.retrying = true;
+            progress.retryItem = `Message ${i + 1}`;
+            try {
+              const msg = await handler.fetchMessage(msgList[i].number);
+              const result = processAndTrack(msg, 'INBOX');
+              if (result === 'skipped') stats.skipped++;
+              else if (result === 'failed') stats.failed++;
+              else stats.acquired++;
+            } catch (retryErr) {
+              failedCount++;
+              stats.failed++;
+              progress.failed++;
+              errors.push({ index: i, error: retryErr.message, timestamp: new Date().toISOString(), type: 'message_fetch_error' });
+              progress.errors.push(`Message ${i + 1}: ${retryErr.message}`);
+            }
+            progress.retrying = false;
           }
         }
         folderStats['INBOX'] = stats;
@@ -635,30 +876,41 @@ router.post('/projects/:id/collect', async (req, res) => {
       case 'zoho_api':
       case 'jmap': {
         const handlers = {
-          ews:      () => new EwsHandler(config || { email: project.target_email }),
+          ews:      async () => {
+            const ewsConfig = config || { email: project.target_email };
+            if (!ewsConfig.password && msGetAuthStatus().authorized) {
+              ewsConfig.authType = 'oauth2';
+              ewsConfig.accessToken = await msGetAccessToken();
+            }
+            return new EwsHandler(ewsConfig);
+          },
           graph:    () => new GraphHandler(config || { email: project.target_email, authType: 'delegated' }),
           gmail_api:() => new GmailHandler(config || { email: project.target_email, authType: 'oauth2' }),
           zoho_api: () => new ZohoHandler(config || { email: project.target_email }),
           jmap:     () => new JmapHandler(config || { email: project.target_email }),
         };
-        handler = handlers[project.provider_type]();
+        handler = await handlers[project.provider_type]();
+        progress.phase = 'connecting';
         await retryWithBackoff(() => handler.connect());
+        progress.phase = 'collecting';
 
         for (const folder of targetFolders) {
           const stats = { acquired: 0, skipped: 0, failed: 0 };
+          progress.currentFolder = folder;
           try {
             const messages = await retryWithBackoff(() =>
               handler.fetchMessages(folder, { limit, searchCriteria: searchQuery })
             );
+            progress.total += messages.length;
             for (const msg of messages) {
-              msg.folder = msg.folder || folder;
-              const result = processMessageItem(msg, project.id, acquisitionId, existingIds, differential, errors);
-              if (result === 'skipped') { skippedCount++; stats.skipped++; }
-              else if (result === 'failed') { failedCount++; stats.failed++; }
-              else { allMessages.push(msg); stats.acquired++; }
+              const result = processAndTrack(msg, folder);
+              if (result === 'skipped') stats.skipped++;
+              else if (result === 'failed') stats.failed++;
+              else stats.acquired++;
             }
           } catch (folderErr) {
             errors.push({ folder, error: folderErr.message, timestamp: new Date().toISOString(), type: 'folder_error' });
+            progress.errors.push(`${folder}: ${folderErr.message}`);
           }
           folderStats[folder] = stats;
         }
@@ -671,13 +923,44 @@ router.post('/projects/:id/collect', async (req, res) => {
         throw new Error(`Unsupported protocol: ${project.provider_type}`);
     }
 
+    // Retry all failed messages one more time
+    if (errors.filter(e => e.type === 'message_fetch_error').length > 0) {
+      progress.phase = 'retrying_failed';
+      progress.retrying = true;
+    }
+
     const totalBytes = allMessages.reduce((sum, m) => sum + (m.size || 0), 0);
-    const status = failedCount > 0 && allMessages.length === 0 ? 'failed'
-      : failedCount > 0 ? 'completed_with_errors' : 'completed';
+    const totalFound = allMessages.length + skippedCount + failedCount;
+    const completionType = determineCompletionType(allMessages.length, failedCount, skippedCount, totalFound);
+    const status = completionType === 'no_items_found' ? 'completed'
+      : completionType.startsWith('completed_with_errors') ? 'completed_with_errors'
+      : completionType === 'canceled' ? 'failed'
+      : failedCount > 0 && allMessages.length === 0 ? 'failed'
+      : 'completed';
+
+    progress.phase = 'finalizing';
+
+    const logResult = writeAcquisitionLogs(logsDir, sessionName, {
+      startedAt,
+      protocol: project.provider_type,
+      targetEmail: project.target_email,
+      totalFound,
+      acquired: allMessages.length,
+      skipped: skippedCount,
+      failed: failedCount,
+      totalBytes,
+      folderStats,
+      errors,
+      downloadedItems,
+      differentialExclusions,
+      completionType,
+    });
 
     updateAcquisition(acquisitionId, {
       status,
-      totalMessages: allMessages.length + skippedCount + failedCount,
+      completionType,
+      sessionDir,
+      totalMessages: totalFound,
       acquiredMessages: allMessages.length,
       failedMessages: failedCount,
       skippedMessages: skippedCount,
@@ -688,7 +971,7 @@ router.post('/projects/:id/collect', async (req, res) => {
 
     updateProjectStatus(project.id, status === 'failed' ? 'error' : 'completed');
 
-    addAuditEntry(project.id, 'ACQUISITION_COMPLETED', `Acquired ${allMessages.length} messages via ${project.provider_type.toUpperCase()}${differential ? ` (differential: ${skippedCount} skipped)` : ''}${failedCount > 0 ? ` (${failedCount} failed)` : ''}`, {
+    addAuditEntry(project.id, 'ACQUISITION_COMPLETED', `Acquired ${allMessages.length} messages via ${project.provider_type.toUpperCase()}${differential ? ` (differential: ${skippedCount} skipped)` : ''}${failedCount > 0 ? ` (${failedCount} failed)` : ''} — ${completionType}`, {
       acquisitionId,
       messageCount: allMessages.length,
       skippedCount,
@@ -698,30 +981,58 @@ router.post('/projects/:id/collect', async (req, res) => {
       folders: targetFolders,
       folderStats,
       protocol: project.provider_type,
+      completionType,
+      sessionDir,
+      logFiles: logResult.files,
       errors: errors.slice(0, 50),
     }, project.examiner_name, acquisitionId);
 
     const tsResult = TimestampService.timestampCollection(project.id, allMessages);
     saveTimestampRecord(project.id, 'collection', tsResult.collectionDigest, tsResult.timestamp);
 
+    progress.active = false;
+    progress.phase = 'complete';
+
     res.json({
       acquisitionId,
       status,
+      completionType,
       messageCount: allMessages.length,
       skippedCount,
       failedCount,
       differential: !!differential,
       totalBytes,
       folderStats,
+      sessionDir,
+      mimeOutputDir: mimeDir,
+      logFiles: logResult.files,
       errors: errors.slice(0, 50),
       protocolLog: handler?.getProtocolLog() || [],
       timestamp: tsResult.timestamp.genTime,
     });
   } catch (err) {
+    progress.active = false;
+    progress.phase = 'error';
+    progress.errors.push(err.message);
+    collectionProgress.set(project.id, progress);
+
+    try {
+      writeAcquisitionLogs(logsDir, sessionName, {
+        startedAt,
+        protocol: project.provider_type,
+        targetEmail: project.target_email,
+        totalFound: 0, acquired: 0, skipped: 0, failed: 1, totalBytes: 0,
+        folderStats: {},
+        errors: [{ error: err.message, timestamp: new Date().toISOString(), type: 'fatal' }],
+        downloadedItems: [], differentialExclusions: [],
+        completionType: 'fatal_error',
+      });
+    } catch {}
+
     updateAcquisition(acquisitionId, { status: 'failed', errorLog: [{ error: err.message, timestamp: new Date().toISOString(), type: 'fatal' }] });
     updateProjectStatus(project.id, 'error');
-    addAuditEntry(project.id, 'ACQUISITION_FAILED', err.message, { acquisitionId, error: err.message });
-    res.status(500).json({ error: err.message });
+    addAuditEntry(project.id, 'ACQUISITION_FAILED', err.message, { acquisitionId, error: err.message, sessionDir });
+    res.status(500).json({ error: err.message, sessionDir });
   }
 });
 
@@ -834,7 +1145,12 @@ router.post('/projects/:id/search', async (req, res) => {
         break;
       }
       case 'ews': {
-        const handler = new EwsHandler({ email: project.target_email });
+        const ewsConfig = { email: project.target_email };
+        if (msGetAuthStatus().authorized) {
+          ewsConfig.authType = 'oauth2';
+          ewsConfig.accessToken = await msGetAccessToken();
+        }
+        const handler = new EwsHandler(ewsConfig);
         await handler.connect();
         serverResult = await handler.searchMailboxes(criteria);
         serverResult.protocolLog = handler.getProtocolLog();
@@ -2604,6 +2920,105 @@ function verifyAuditChain(auditLog) {
   }
 
   return { valid, entries: auditLog.length, breaks: details };
+}
+
+// --- Transfer (Robocopy + 7-Zip) ---
+
+function find7zPath() {
+  const candidates = [
+    'C:\\Program Files\\7-Zip\\7z.exe',
+    'C:\\Program Files (x86)\\7-Zip\\7z.exe',
+  ];
+  const __dirname2 = path.dirname(fileURLToPath(import.meta.url));
+  const vendorPath = path.resolve(__dirname2, '../../node_modules/electron-winstaller/vendor/7z-x64.exe');
+  candidates.push(vendorPath);
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+router.post('/projects/:id/transfer', async (req, res) => {
+  const project = getProject(req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const { source, destination, mode, zipPassword } = req.body;
+  if (!source || !destination) return res.status(400).json({ error: 'Source and destination are required' });
+
+  if (!fs.existsSync(source)) return res.status(400).json({ error: 'Source directory does not exist' });
+
+  const log = [];
+
+  try {
+    fs.mkdirSync(destination, { recursive: true });
+
+    if (mode === 'zipped') {
+      const sevenZip = find7zPath();
+      if (!sevenZip) return res.status(500).json({ error: '7-Zip not found. Install 7-Zip or ensure it is in Program Files.' });
+
+      const archiveName = `${project.name || project.id}_collection.7z`.replace(/[<>:"/\\|?*]/g, '_');
+      const archivePath = path.join(destination, archiveName);
+
+      const args = ['a', '-t7z', '-mx=5', '-r', archivePath, path.join(source, '*')];
+      if (zipPassword) {
+        args.splice(3, 0, `-p${zipPassword}`, '-mhe=on');
+      }
+
+      log.push(`7-Zip: ${sevenZip}`);
+      log.push(`Creating archive: ${archivePath}`);
+
+      const { stdout, stderr } = await execFileAsync(sevenZip, args, { timeout: 600000 });
+      if (stdout) log.push(stdout.trim());
+      if (stderr) log.push(stderr.trim());
+
+      const stat = fs.statSync(archivePath);
+      addAuditEntry(project.id, 'TRANSFER_COMPLETED', `Zipped transfer to ${destination} (${formatBytesServer(stat.size)})`, { destination, archivePath, encrypted: !!zipPassword, size: stat.size });
+
+      res.json({ archivePath, totalBytes: stat.size, encrypted: !!zipPassword, log });
+
+    } else {
+      log.push(`Robocopy: ${source} -> ${destination}`);
+      const args = [source, destination, '/E', '/COPY:DAT', '/R:2', '/W:1', '/NP', '/LOG+:NUL'];
+
+      try {
+        const { stdout, stderr } = await execFileAsync('robocopy', args, { timeout: 600000 });
+        if (stdout) log.push(stdout.trim());
+        if (stderr) log.push(stderr.trim());
+      } catch (robocopyErr) {
+        // Robocopy exit codes 0-7 are success/partial
+        if (robocopyErr.code !== undefined && robocopyErr.code <= 7) {
+          if (robocopyErr.stdout) log.push(robocopyErr.stdout.trim());
+        } else {
+          throw robocopyErr;
+        }
+      }
+
+      let totalBytes = 0;
+      let filesCopied = 0;
+      const countDir = (dir) => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (entry.isFile()) { totalBytes += fs.statSync(path.join(dir, entry.name)).size; filesCopied++; }
+          else if (entry.isDirectory()) countDir(path.join(dir, entry.name));
+        }
+      };
+      countDir(destination);
+
+      addAuditEntry(project.id, 'TRANSFER_COMPLETED', `Robocopy transfer: ${filesCopied} files (${formatBytesServer(totalBytes)}) to ${destination}`, { destination, filesCopied, totalBytes });
+
+      res.json({ filesCopied, totalBytes, log });
+    }
+  } catch (err) {
+    addAuditEntry(project.id, 'TRANSFER_FAILED', err.message, { source, destination, mode });
+    res.status(500).json({ error: err.message, log });
+  }
+});
+
+function formatBytesServer(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
 export default router;

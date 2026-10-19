@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS attachments (
 CREATE TABLE IF NOT EXISTS acquisitions (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
-  status TEXT DEFAULT 'pending', -- pending, running, completed, failed, paused
+  status TEXT DEFAULT 'pending', -- pending, running, completed, completed_with_errors, failed, paused, canceled
+  completion_type TEXT, -- completed_without_errors, completed_with_errors_download_complete, completed_with_errors_remaining_items, canceled, no_items_found, fatal_error
   started_at TEXT,
   completed_at TEXT,
   total_messages INTEGER DEFAULT 0,
@@ -95,7 +96,8 @@ CREATE TABLE IF NOT EXISTS acquisitions (
   total_bytes INTEGER DEFAULT 0,
   error_log TEXT,
   protocol_log TEXT,
-  folders_json TEXT
+  folders_json TEXT,
+  session_dir TEXT -- path to the session output directory (MIME files + logs)
 );
 
 CREATE TABLE IF NOT EXISTS search_queries (

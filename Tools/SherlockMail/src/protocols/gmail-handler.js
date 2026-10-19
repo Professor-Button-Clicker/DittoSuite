@@ -77,7 +77,7 @@ export class GmailHandler {
       ? labelIdOrFolder
       : labelIdOrFolder.gmailLabelId || labelIdOrFolder.path || labelIdOrFolder;
 
-    const maxResults = limit || 100;
+    const maxResults = (limit && limit > 0) ? limit : 999999;
     this.log('C→S', `GET /users/me/messages?labelIds=${labelId}&maxResults=${maxResults}`);
 
     const messages = [];

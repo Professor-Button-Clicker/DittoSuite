@@ -138,72 +138,105 @@ export class GraphHandler {
     };
   }
 
-  async fetchMessages(folderIdOrPath, { limit } = {}) {
+  async fetchMessages(folderIdOrPath, { limit, searchCriteria } = {}) {
     const folderId = typeof folderIdOrPath === 'string'
       ? folderIdOrPath
       : folderIdOrPath.graphFolderId || folderIdOrPath.path || folderIdOrPath;
 
-    const top = limit || 25;
+    const pageSize = Math.min(limit || 50, 50);
+    const maxMessages = limit || Infinity;
 
-    let listUrl;
+    let resolvedFolderId;
     if (folderId.match(/^[A-Za-z0-9_=-]+$/)) {
-      listUrl = `/me/mailFolders/${folderId}/messages?$top=${top}&$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,hasAttachments,internetMessageHeaders`;
+      resolvedFolderId = folderId;
     } else {
       const foldersData = await this.graphFetch('/me/mailFolders?$top=100');
       const match = (foldersData.value || []).find(f => f.displayName === folderId);
       if (!match) throw new Error(`Folder "${folderId}" not found`);
-      listUrl = `/me/mailFolders/${match.id}/messages?$top=${top}&$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,hasAttachments,internetMessageHeaders`;
+      resolvedFolderId = match.id;
     }
-
-    this.log('C→S', `GET ${GRAPH_BASE}${listUrl}`);
-    const listData = await this.graphFetch(listUrl);
-    const msgStubs = listData.value || [];
-
-    this.log('S→C', `200 OK - ${msgStubs.length} messages listed`);
 
     const messages = [];
-    for (const stub of msgStubs) {
-      this.log('C→S', `GET ${GRAPH_BASE}/me/messages/${stub.id}/$value`);
+    let nextLink = null;
+    let pageNum = 0;
 
-      const mimeRes = await fetch(`${GRAPH_BASE}/me/messages/${stub.id}/$value`, {
-        headers: { Authorization: `Bearer ${this.accessToken}` },
-      });
+    const firstUrl = `/me/mailFolders/${resolvedFolderId}/messages?$top=${pageSize}&$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,hasAttachments,internetMessageHeaders`;
 
-      if (!mimeRes.ok) {
-        this.log('S→C', `${mimeRes.status} - Failed to fetch MIME for ${stub.id}`);
-        continue;
+    do {
+      const listUrl = nextLink || firstUrl;
+      this.log('C→S', `GET ${nextLink ? '(nextLink page ' + (pageNum + 1) + ')' : GRAPH_BASE + listUrl}`);
+
+      const listData = await this.graphFetch(listUrl);
+      const msgStubs = listData.value || [];
+      nextLink = listData['@odata.nextLink'] || null;
+      pageNum++;
+
+      this.log('S→C', `200 OK - ${msgStubs.length} messages (page ${pageNum})${nextLink ? ', more available' : ''}`);
+
+      for (const stub of msgStubs) {
+        if (messages.length >= maxMessages) break;
+
+        this.log('C→S', `GET ${GRAPH_BASE}/me/messages/${stub.id}/$value`);
+
+        const mimeRes = await fetch(`${GRAPH_BASE}/me/messages/${stub.id}/$value`, {
+          headers: { Authorization: `Bearer ${this.accessToken}` },
+        });
+
+        if (!mimeRes.ok) {
+          this.log('S→C', `${mimeRes.status} - Failed to fetch MIME for ${stub.id}`);
+          continue;
+        }
+
+        const rawBuffer = Buffer.from(await mimeRes.arrayBuffer());
+        this.log('S→C', `200 OK - MIME content (${rawBuffer.length} bytes)`);
+
+        const headers = this.parseHeaders(rawBuffer.toString('utf8', 0, Math.min(rawBuffer.length, 8192)));
+
+        const internetHeaders = stub.internetMessageHeaders || [];
+        const messageIdHeader = internetHeaders.find(h => h.name.toLowerCase() === 'message-id');
+        const attachmentCount = stub.hasAttachments
+          ? (headers['content-type']?.match(/boundary=/i) ? this.countAttachmentBoundaries(rawBuffer.toString('utf8')) : 1)
+          : 0;
+
+        messages.push({
+          id: uuidv4(),
+          uid: messages.length + 1,
+          serviceId: stub.id,
+          graphMessageId: stub.id,
+          folder: folderIdOrPath,
+          subject: stub.subject || headers.subject || '(no subject)',
+          fromAddress: stub.from?.emailAddress?.address || headers.from || '',
+          toAddresses: (stub.toRecipients || []).map(r => r.emailAddress?.address),
+          ccAddresses: (stub.ccRecipients || []).map(r => r.emailAddress?.address),
+          bccAddresses: (stub.bccRecipients || []).map(r => r.emailAddress?.address),
+          date: stub.receivedDateTime || (headers.date ? new Date(headers.date).toISOString() : new Date().toISOString()),
+          messageId: messageIdHeader?.value || headers['message-id'] || null,
+          inReplyTo: headers['in-reply-to'] || null,
+          size: rawBuffer.length,
+          hashMd5: crypto.createHash('md5').update(rawBuffer).digest('hex'),
+          hashSha256: crypto.createHash('sha256').update(rawBuffer).digest('hex'),
+          hashSha512: crypto.createHash('sha512').update(rawBuffer).digest('hex'),
+          hasAttachments: stub.hasAttachments || false,
+          attachmentCount,
+          bodyText: this.extractBody(rawBuffer.toString('utf8')),
+          contentType: headers['content-type'] || 'text/plain',
+          rawMime: rawBuffer,
+        });
       }
+    } while (nextLink && messages.length < maxMessages);
 
-      const rawBuffer = Buffer.from(await mimeRes.arrayBuffer());
-      this.log('S→C', `200 OK - MIME content (${rawBuffer.length} bytes)`);
-
-      const headers = this.parseHeaders(rawBuffer.toString('utf8', 0, Math.min(rawBuffer.length, 8192)));
-
-      messages.push({
-        id: uuidv4(),
-        uid: messages.length + 1,
-        graphMessageId: stub.id,
-        folder: folderIdOrPath,
-        subject: stub.subject || headers.subject || '(no subject)',
-        fromAddress: stub.from?.emailAddress?.address || headers.from || '',
-        toAddresses: (stub.toRecipients || []).map(r => r.emailAddress?.address),
-        ccAddresses: (stub.ccRecipients || []).map(r => r.emailAddress?.address),
-        bccAddresses: (stub.bccRecipients || []).map(r => r.emailAddress?.address),
-        date: stub.receivedDateTime || (headers.date ? new Date(headers.date).toISOString() : new Date().toISOString()),
-        size: rawBuffer.length,
-        hashMd5: crypto.createHash('md5').update(rawBuffer).digest('hex'),
-        hashSha256: crypto.createHash('sha256').update(rawBuffer).digest('hex'),
-        hashSha512: crypto.createHash('sha512').update(rawBuffer).digest('hex'),
-        hasAttachments: stub.hasAttachments || false,
-        attachmentCount: 0,
-        bodyText: this.extractBody(rawBuffer.toString('utf8')),
-        contentType: headers['content-type'] || 'text/plain',
-        rawMime: rawBuffer,
-      });
-    }
-
-    this.log('CLIENT', `Fetched ${messages.length} messages from ${folderIdOrPath} via Graph API`);
+    this.log('CLIENT', `Fetched ${messages.length} messages from ${folderIdOrPath} via Graph API (${pageNum} pages)`);
     return messages;
+  }
+
+  countAttachmentBoundaries(raw) {
+    const ct = raw.match(/Content-Type:\s*([^\r\n]+)/i);
+    if (!ct) return 0;
+    const boundaryMatch = ct[1].match(/boundary="?([^";\r\n]+)"?/i);
+    if (!boundaryMatch) return 0;
+    const boundary = boundaryMatch[1];
+    const parts = raw.split('--' + boundary).length - 2;
+    return Math.max(parts - 1, 0);
   }
 
   parseHeaders(headerBlock) {
