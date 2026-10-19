@@ -6,7 +6,8 @@ import { URL } from 'url';
 import crypto from 'crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CONFIG_DIR = path.join(__dirname, '..', '..', 'data');
+const BUNDLED_DIR = path.join(__dirname, '..', '..', 'data');
+const CONFIG_DIR = process.env.SHERLOCKMAIL_DATA_DIR || BUNDLED_DIR;
 const TOKENS_PATH = path.join(CONFIG_DIR, 'microsoft-tokens.json');
 const CREDENTIALS_PATH = path.join(CONFIG_DIR, 'microsoft-credentials.json');
 
@@ -24,6 +25,13 @@ function ensureDataDir() {
 export function loadCredentials() {
   if (fs.existsSync(CREDENTIALS_PATH)) {
     return JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
+  }
+  const bundledPath = path.join(BUNDLED_DIR, 'microsoft-credentials.json');
+  if (bundledPath !== CREDENTIALS_PATH && fs.existsSync(bundledPath)) {
+    const raw = JSON.parse(fs.readFileSync(bundledPath, 'utf8'));
+    ensureDataDir();
+    fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(raw, null, 2));
+    return raw;
   }
   return null;
 }
