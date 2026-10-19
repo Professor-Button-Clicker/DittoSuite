@@ -62,7 +62,7 @@ app.post('/api/pick-folder', (req, res) => {
   let cmd;
 
   if (platform === 'win32') {
-    cmd = 'powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = \'Select Destination Folder\'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog() -eq \'OK\') { Write-Output $f.SelectedPath } else { Write-Output \'__CANCELLED__\' }"';
+    cmd = 'powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles(); $owner = New-Object System.Windows.Forms.Form -Property @{TopMost=$true; ShowInTaskbar=$false; StartPosition=\'CenterScreen\'; WindowState=\'Minimized\'}; $owner.Show(); $owner.Hide(); $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = \'Select Destination Folder\'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog($owner) -eq \'OK\') { Write-Output $f.SelectedPath } else { Write-Output \'__CANCELLED__\' }; $owner.Dispose()"';
   } else if (platform === 'darwin') {
     cmd = 'osascript -e \'POSIX path of (choose folder with prompt "Select Destination Folder")\'';
   } else {
@@ -89,15 +89,16 @@ app.post('/api/open-folder', (req, res) => {
   }
 
   const platform = process.platform;
-  try {
-    const escaped = resolved.replace(/"/g, '\\"');
-    if (platform === 'win32') exec(`explorer.exe "${escaped}"`);
-    else if (platform === 'darwin') exec(`open "${escaped}"`);
-    else exec(`xdg-open "${escaped}"`);
+  const escaped = resolved.replace(/"/g, '\\"');
+  let cmd;
+  if (platform === 'win32') cmd = `start "" "${escaped}"`;
+  else if (platform === 'darwin') cmd = `open "${escaped}"`;
+  else cmd = `xdg-open "${escaped}"`;
+
+  exec(cmd, (err) => {
+    if (err) return res.status(500).json({ error: err.message });
     res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  });
 });
 
 app.use('/api', apiRoutes);
