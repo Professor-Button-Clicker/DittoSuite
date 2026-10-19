@@ -28,8 +28,8 @@ export class ImapHandler {
       port: effectivePort,
       secure: tls !== false,
       auth: { user: username || email, pass: password },
-      socketTimeout: 30000,
-      greetingTimeout: 15000,
+      socketTimeout: 210000,
+      greetingTimeout: 195000,
       logger: {
         debug: (msg) => this.log('DEBUG', msg),
         info: (msg) => this.log('INFO', msg),
@@ -106,7 +106,7 @@ export class ImapHandler {
   async fetchSingleMessage(folderPath, uid) {
     const lock = await this.client.getMailboxLock(folderPath);
     try {
-      const downloadWithTimeout = (timeoutMs = 60000) => new Promise(async (resolve, reject) => {
+      const downloadWithTimeout = (timeoutMs = 240000) => new Promise(async (resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`Download timeout for UID ${uid} after ${timeoutMs / 1000}s`)), timeoutMs);
         try {
           const raw = await this.client.download(uid.toString(), undefined, { uid: true });
