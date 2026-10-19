@@ -69,8 +69,12 @@ const launcherSource = `
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Threading;
 
 class SherlockMailLauncher {
+    static Process nodeProcess;
+
     static int Main(string[] args) {
         string exeDir = Path.GetDirectoryName(
             System.Reflection.Assembly.GetExecutingAssembly().Location);
@@ -78,38 +82,135 @@ class SherlockMailLauncher {
         string server = Path.Combine(exeDir, "server.js");
 
         if (!File.Exists(node)) {
-            Console.Error.WriteLine("Error: node.exe not found in " + exeDir);
-            Console.Error.WriteLine("Ensure node.exe is in the same directory as SherlockMail.exe");
-            Console.WriteLine("Press any key to exit...");
-            Console.ReadKey();
+            System.Windows.Forms.MessageBox.Show(
+                "node.exe not found in " + exeDir +
+                "\\n\\nEnsure node.exe is in the same directory as SherlockMail.exe",
+                "SherlockMail", System.Windows.Forms.MessageBoxButtons.OK,
+                System.Windows.Forms.MessageBoxIcon.Error);
             return 1;
         }
 
-        string arguments = "\\"" + server + "\\"";
-        if (args.Length > 0) {
-            arguments += " " + String.Join(" ", args);
+        int port = 3000;
+        for (int i = 0; i < args.Length - 1; i++) {
+            if (args[i] == "--port") int.TryParse(args[i + 1], out port);
         }
+
+        string serverArgs = "\\"" + server + "\\" --no-browser";
+        if (args.Length > 0) serverArgs += " " + String.Join(" ", args);
 
         ProcessStartInfo psi = new ProcessStartInfo();
         psi.FileName = node;
-        psi.Arguments = arguments;
+        psi.Arguments = serverArgs;
         psi.WorkingDirectory = exeDir;
         psi.UseShellExecute = false;
+        psi.CreateNoWindow = true;
 
         try {
-            Process p = Process.Start(psi);
-            Console.CancelKeyPress += (s, e) => {
-                e.Cancel = true;
-                try { p.Kill(); } catch {}
-            };
-            p.WaitForExit();
-            return p.ExitCode;
+            nodeProcess = Process.Start(psi);
         } catch (Exception ex) {
-            Console.Error.WriteLine("Failed to start SherlockMail: " + ex.Message);
-            Console.WriteLine("Press any key to exit...");
-            Console.ReadKey();
+            System.Windows.Forms.MessageBox.Show(
+                "Failed to start server: " + ex.Message,
+                "SherlockMail", System.Windows.Forms.MessageBoxButtons.OK,
+                System.Windows.Forms.MessageBoxIcon.Error);
             return 1;
         }
+
+        string url = "http://localhost:" + port;
+        bool ready = false;
+        for (int i = 0; i < 60; i++) {
+            try {
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url + "/api/stats");
+                req.Timeout = 1000;
+                using (req.GetResponse()) { ready = true; break; }
+            } catch { Thread.Sleep(500); }
+        }
+
+        if (!ready) {
+            Shutdown();
+            System.Windows.Forms.MessageBox.Show(
+                "Server failed to start within 30 seconds.",
+                "SherlockMail", System.Windows.Forms.MessageBoxButtons.OK,
+                System.Windows.Forms.MessageBoxIcon.Error);
+            return 1;
+        }
+
+        string edgePath = FindEdge();
+        if (edgePath != null) {
+            string profileDir = Path.Combine(exeDir, ".sherlockmail-profile");
+            ProcessStartInfo edgePsi = new ProcessStartInfo();
+            edgePsi.FileName = edgePath;
+            edgePsi.Arguments = "--app=" + url
+                + " \\"--user-data-dir=" + profileDir + "\\""
+                + " --no-first-run --disable-default-apps"
+                + " --window-size=1280,800";
+            edgePsi.UseShellExecute = false;
+
+            try {
+                Process edgeProc = Process.Start(edgePsi);
+                edgeProc.WaitForExit();
+            } catch {
+                FallbackBrowser(url);
+            }
+        } else {
+            FallbackBrowser(url);
+        }
+
+        Shutdown();
+        return 0;
+    }
+
+    static void FallbackBrowser(string url) {
+        try {
+            string chromePath = FindChrome();
+            if (chromePath != null) {
+                string profileDir = Path.Combine(
+                    Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),
+                    ".sherlockmail-profile");
+                ProcessStartInfo pi = new ProcessStartInfo();
+                pi.FileName = chromePath;
+                pi.Arguments = "--app=" + url
+                    + " \\"--user-data-dir=" + profileDir + "\\""
+                    + " --no-first-run --disable-default-apps"
+                    + " --window-size=1280,800";
+                pi.UseShellExecute = false;
+                Process p = Process.Start(pi);
+                p.WaitForExit();
+                return;
+            }
+        } catch {}
+
+        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        if (nodeProcess != null) nodeProcess.WaitForExit();
+    }
+
+    static void Shutdown() {
+        try {
+            if (nodeProcess != null && !nodeProcess.HasExited) nodeProcess.Kill();
+        } catch {}
+    }
+
+    static string FindEdge() {
+        string[] paths = new string[] {
+            @"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+            @"C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+            Path.Combine(Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData),
+                @"Microsoft\\Edge\\Application\\msedge.exe"),
+        };
+        foreach (string p in paths) { if (File.Exists(p)) return p; }
+        return null;
+    }
+
+    static string FindChrome() {
+        string[] paths = new string[] {
+            @"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            @"C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+            Path.Combine(Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData),
+                @"Google\\Chrome\\Application\\chrome.exe"),
+        };
+        foreach (string p in paths) { if (File.Exists(p)) return p; }
+        return null;
     }
 }
 `;
@@ -129,7 +230,7 @@ const cscPaths = [
 for (const cscPath of cscPaths) {
   if (!existsSync(cscPath)) continue;
   try {
-    execSync(`"${cscPath}" /nologo /out:"${exePath}" /target:exe /optimize+ "${csPath}"`, { stdio: 'pipe' });
+    execSync(`"${cscPath}" /nologo /out:"${exePath}" /target:winexe /optimize+ /reference:System.Windows.Forms.dll "${csPath}"`, { stdio: 'pipe' });
     launcherCreated = true;
     console.log('         SherlockMail.exe (compiled)');
     break;
@@ -139,7 +240,7 @@ for (const cscPath of cscPaths) {
 if (!launcherCreated) {
   // Try dotnet csc
   try {
-    execSync(`dotnet csc /nologo /out:"${exePath}" /target:exe /optimize+ "${csPath}"`, { stdio: 'pipe' });
+    execSync(`dotnet csc /nologo /out:"${exePath}" /target:winexe /optimize+ /reference:System.Windows.Forms.dll "${csPath}"`, { stdio: 'pipe' });
     launcherCreated = true;
     console.log('         SherlockMail.exe (compiled via dotnet)');
   } catch { /* fallback below */ }
@@ -164,9 +265,9 @@ console.log(`  Distribution: ${DIST}`);
 console.log('');
 console.log('  To run:');
 if (launcherCreated) {
-  console.log('    SherlockMail.exe');
-  console.log('    SherlockMail.exe --port 8080');
-  console.log('    SherlockMail.exe --data-dir "C:\\Cases" --no-browser');
+  console.log('    SherlockMail.exe                    — opens as a native desktop window');
+  console.log('    SherlockMail.exe --port 8080        — custom port');
+  console.log('    SherlockMail.exe --data-dir "C:\\Cases"');
 } else {
   console.log('    SherlockMail.cmd');
   console.log('    node server.js --port 8080');
@@ -174,4 +275,5 @@ if (launcherCreated) {
 console.log('');
 console.log('  To distribute: zip the SherlockMail folder and share.');
 console.log('  No Node.js or Electron installation required on the target machine.');
+console.log('  The app opens in a native window (via Edge/Chrome app mode).');
 console.log('');
