@@ -21,22 +21,27 @@ export class ImapHandler {
   async connect() {
     const { host, port, username, password, tls, email } = this.config;
 
+    const effectivePort = port || (tls !== false ? 993 : 143);
+
     this.client = new ImapFlow({
       host,
-      port: port || (tls !== false ? 993 : 143),
+      port: effectivePort,
       secure: tls !== false,
       auth: { user: username || email, pass: password },
+      socketTimeout: 30000,
+      greetingTimeout: 15000,
       logger: {
         debug: (msg) => this.log('DEBUG', msg),
         info: (msg) => this.log('INFO', msg),
         warn: (msg) => this.log('WARN', msg),
         error: (msg) => this.log('ERROR', msg),
-      }
+      },
+      emitLogs: false,
     });
 
     await this.client.connect();
-    this.log('CLIENT', `Connected to ${host}:${port || (tls !== false ? 993 : 143)}`);
-    return { success: true, host, port: port || (tls !== false ? 993 : 143) };
+    this.log('CLIENT', `Connected to ${host}:${effectivePort}`);
+    return { success: true, host, port: effectivePort };
   }
 
   async listFolders() {
@@ -101,12 +106,22 @@ export class ImapHandler {
   async fetchSingleMessage(folderPath, uid) {
     const lock = await this.client.getMailboxLock(folderPath);
     try {
-      const raw = await this.client.download(uid.toString(), undefined, { uid: true });
-      const chunks = [];
-      for await (const chunk of raw.content) {
-        chunks.push(chunk);
-      }
-      const rawBuffer = Buffer.concat(chunks);
+      const downloadWithTimeout = (timeoutMs = 60000) => new Promise(async (resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Download timeout for UID ${uid} after ${timeoutMs / 1000}s`)), timeoutMs);
+        try {
+          const raw = await this.client.download(uid.toString(), undefined, { uid: true });
+          const chunks = [];
+          for await (const chunk of raw.content) {
+            chunks.push(chunk);
+          }
+          clearTimeout(timer);
+          resolve(Buffer.concat(chunks));
+        } catch (err) {
+          clearTimeout(timer);
+          reject(err);
+        }
+      });
+      const rawBuffer = await downloadWithTimeout();
 
       const hashMd5 = crypto.createHash('md5').update(rawBuffer).digest('hex');
       const hashSha256 = crypto.createHash('sha256').update(rawBuffer).digest('hex');
