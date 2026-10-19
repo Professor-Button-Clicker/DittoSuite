@@ -756,7 +756,7 @@ router.post('/projects/:id/collect', async (req, res) => {
     });
   }
 
-  const progress = { active: true, phase: 'connecting', acquired: 0, failed: 0, skipped: 0, total: 0, retrying: false, retryItem: '', currentFolder: '', errors: [], sessionDir };
+  const progress = { active: true, phase: 'connecting', acquired: 0, failed: 0, skipped: 0, total: 0, retrying: false, retryItem: '', currentFolder: '', errors: [], sessionDir, startedAt: Date.now(), elapsedMs: 0, estimateMs: null };
   collectionProgress.set(project.id, progress);
   const startedAt = new Date().toISOString();
 
@@ -802,23 +802,43 @@ router.post('/projects/:id/collect', async (req, res) => {
         await retryWithBackoff(() => handler.connect());
         progress.phase = 'collecting';
 
+        const allUids = {};
+        for (const folder of targetFolders) {
+          progress.currentFolder = folder;
+          try {
+            allUids[folder] = await retryWithBackoff(() =>
+              handler.listMessageUids(folder, { limit, searchCriteria: searchQuery })
+            );
+            progress.total += allUids[folder].length;
+          } catch (folderErr) {
+            errors.push({ folder, error: folderErr.message, timestamp: new Date().toISOString(), type: 'folder_error' });
+            progress.errors.push(`${folder}: ${folderErr.message}`);
+            allUids[folder] = [];
+          }
+        }
+
         for (const folder of targetFolders) {
           const stats = { acquired: 0, skipped: 0, failed: 0 };
           progress.currentFolder = folder;
-          try {
-            const messages = await retryWithBackoff(() =>
-              handler.fetchMessages(folder, { limit, searchCriteria: searchQuery })
-            );
-            progress.total += messages.length;
-            for (const msg of messages) {
+          for (const uid of allUids[folder]) {
+            try {
+              const msg = await retryWithBackoff(() => handler.fetchSingleMessage(folder, uid));
               const result = processAndTrack(msg, folder);
               if (result === 'skipped') stats.skipped++;
               else if (result === 'failed') stats.failed++;
               else stats.acquired++;
+            } catch (msgErr) {
+              errors.push({ folder, uid, error: msgErr.message, timestamp: new Date().toISOString(), type: 'message_error' });
+              progress.errors.push(`${folder} UID ${uid}: ${msgErr.message}`);
+              failedCount++;
+              progress.failed++;
+              stats.failed++;
             }
-          } catch (folderErr) {
-            errors.push({ folder, error: folderErr.message, timestamp: new Date().toISOString(), type: 'folder_error' });
-            progress.errors.push(`${folder}: ${folderErr.message}`);
+            progress.elapsedMs = Date.now() - progress.startedAt;
+            const done = progress.acquired + progress.failed + progress.skipped;
+            if (done > 0 && progress.total > 0) {
+              progress.estimateMs = Math.round((progress.elapsedMs / done) * (progress.total - done));
+            }
           }
           folderStats[folder] = stats;
         }
@@ -847,7 +867,6 @@ router.post('/projects/:id/collect', async (req, res) => {
             else if (result === 'failed') stats.failed++;
             else stats.acquired++;
           } catch (msgErr) {
-            // Retry once
             progress.retrying = true;
             progress.retryItem = `Message ${i + 1}`;
             try {
@@ -864,6 +883,11 @@ router.post('/projects/:id/collect', async (req, res) => {
               progress.errors.push(`Message ${i + 1}: ${retryErr.message}`);
             }
             progress.retrying = false;
+          }
+          progress.elapsedMs = Date.now() - progress.startedAt;
+          const done = progress.acquired + progress.failed + progress.skipped;
+          if (done > 0 && progress.total > 0) {
+            progress.estimateMs = Math.round((progress.elapsedMs / done) * (progress.total - done));
           }
         }
         folderStats['INBOX'] = stats;
@@ -891,7 +915,7 @@ router.post('/projects/:id/collect', async (req, res) => {
           zoho_api: () => new ZohoHandler(config || { email: project.target_email }),
           jmap:     () => new JmapHandler(config || { email: project.target_email }),
         };
-        handler = await handlers[project.provider_type]();
+        handler = await handlers[effectiveProtocol]();
         progress.phase = 'connecting';
         await retryWithBackoff(() => handler.connect());
         progress.phase = 'collecting';
@@ -909,6 +933,11 @@ router.post('/projects/:id/collect', async (req, res) => {
               if (result === 'skipped') stats.skipped++;
               else if (result === 'failed') stats.failed++;
               else stats.acquired++;
+              progress.elapsedMs = Date.now() - progress.startedAt;
+              const done = progress.acquired + progress.failed + progress.skipped;
+              if (done > 0 && progress.total > 0) {
+                progress.estimateMs = Math.round((progress.elapsedMs / done) * (progress.total - done));
+              }
             }
           } catch (folderErr) {
             errors.push({ folder, error: folderErr.message, timestamp: new Date().toISOString(), type: 'folder_error' });

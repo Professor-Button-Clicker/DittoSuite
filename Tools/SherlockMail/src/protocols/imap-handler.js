@@ -82,78 +82,90 @@ export class ImapHandler {
     return folders;
   }
 
-  async fetchMessages(folderPath, { limit, searchCriteria } = {}) {
+  async listMessageUids(folderPath, { limit, searchCriteria } = {}) {
     const lock = await this.client.getMailboxLock(folderPath);
-    const messages = [];
-
     try {
-      let query = searchCriteria || { all: true };
-
+      const query = searchCriteria || { all: true };
       const uids = [];
-      for await (const msg of this.client.fetch(query, { uid: true, envelope: true, bodyStructure: true, size: true, flags: true })) {
+      for await (const msg of this.client.fetch(query, { uid: true })) {
         uids.push(msg.uid);
         if (limit > 0 && uids.length >= limit) break;
       }
-
-      for (const uid of uids) {
-        try {
-          const raw = await this.client.download(uid.toString(), undefined, { uid: true });
-          const chunks = [];
-          for await (const chunk of raw.content) {
-            chunks.push(chunk);
-          }
-          const rawBuffer = Buffer.concat(chunks);
-
-          const hashMd5 = crypto.createHash('md5').update(rawBuffer).digest('hex');
-          const hashSha256 = crypto.createHash('sha256').update(rawBuffer).digest('hex');
-          const hashSha512 = crypto.createHash('sha512').update(rawBuffer).digest('hex');
-
-          const parsed = await simpleParser(rawBuffer);
-
-          messages.push({
-            id: uuidv4(),
-            uid,
-            folder: folderPath,
-            subject: parsed.subject || '(no subject)',
-            fromAddress: parsed.from?.text || '',
-            toAddresses: parsed.to?.value?.map(a => a.address) || [],
-            ccAddresses: parsed.cc?.value?.map(a => a.address) || [],
-            bccAddresses: parsed.bcc?.value?.map(a => a.address) || [],
-            date: parsed.date?.toISOString() || new Date().toISOString(),
-            messageId: parsed.messageId || null,
-            inReplyTo: parsed.inReplyTo || null,
-            size: rawBuffer.length,
-            flags: [],
-            hasAttachments: (parsed.attachments?.length || 0) > 0,
-            attachmentCount: parsed.attachments?.length || 0,
-            contentType: parsed.headers?.get('content-type')?.value || 'text/plain',
-            hashMd5,
-            hashSha256,
-            hashSha512,
-            bodyText: parsed.text || '',
-            bodyHtml: parsed.html || '',
-            headers: Object.fromEntries(parsed.headers || []),
-            rawSource: rawBuffer.toString('base64'),
-            attachments: (parsed.attachments || []).map(att => ({
-              id: uuidv4(),
-              filename: att.filename || 'unnamed',
-              contentType: att.contentType || 'application/octet-stream',
-              size: att.size || 0,
-              hashMd5: crypto.createHash('md5').update(att.content).digest('hex'),
-              hashSha256: crypto.createHash('sha256').update(att.content).digest('hex'),
-              disposition: att.contentDisposition || 'attachment',
-              contentId: att.contentId || null,
-              isInline: att.contentDisposition === 'inline',
-            })),
-          });
-        } catch (err) {
-          this.log('ERROR', `Failed to fetch UID ${uid}: ${err.message}`);
-        }
-      }
+      this.log('CLIENT', `Enumerated ${uids.length} UIDs in ${folderPath}`);
+      return uids;
     } finally {
       lock.release();
     }
+  }
 
+  async fetchSingleMessage(folderPath, uid) {
+    const lock = await this.client.getMailboxLock(folderPath);
+    try {
+      const raw = await this.client.download(uid.toString(), undefined, { uid: true });
+      const chunks = [];
+      for await (const chunk of raw.content) {
+        chunks.push(chunk);
+      }
+      const rawBuffer = Buffer.concat(chunks);
+
+      const hashMd5 = crypto.createHash('md5').update(rawBuffer).digest('hex');
+      const hashSha256 = crypto.createHash('sha256').update(rawBuffer).digest('hex');
+      const hashSha512 = crypto.createHash('sha512').update(rawBuffer).digest('hex');
+
+      const parsed = await simpleParser(rawBuffer);
+
+      return {
+        id: uuidv4(),
+        uid,
+        folder: folderPath,
+        subject: parsed.subject || '(no subject)',
+        fromAddress: parsed.from?.text || '',
+        toAddresses: parsed.to?.value?.map(a => a.address) || [],
+        ccAddresses: parsed.cc?.value?.map(a => a.address) || [],
+        bccAddresses: parsed.bcc?.value?.map(a => a.address) || [],
+        date: parsed.date?.toISOString() || new Date().toISOString(),
+        messageId: parsed.messageId || null,
+        inReplyTo: parsed.inReplyTo || null,
+        size: rawBuffer.length,
+        flags: [],
+        hasAttachments: (parsed.attachments?.length || 0) > 0,
+        attachmentCount: parsed.attachments?.length || 0,
+        contentType: parsed.headers?.get('content-type')?.value || 'text/plain',
+        hashMd5,
+        hashSha256,
+        hashSha512,
+        bodyText: parsed.text || '',
+        bodyHtml: parsed.html || '',
+        headers: Object.fromEntries(parsed.headers || []),
+        rawSource: rawBuffer.toString('base64'),
+        attachments: (parsed.attachments || []).map(att => ({
+          id: uuidv4(),
+          filename: att.filename || 'unnamed',
+          contentType: att.contentType || 'application/octet-stream',
+          size: att.size || 0,
+          hashMd5: crypto.createHash('md5').update(att.content).digest('hex'),
+          hashSha256: crypto.createHash('sha256').update(att.content).digest('hex'),
+          disposition: att.contentDisposition || 'attachment',
+          contentId: att.contentId || null,
+          isInline: att.contentDisposition === 'inline',
+        })),
+      };
+    } finally {
+      lock.release();
+    }
+  }
+
+  async fetchMessages(folderPath, { limit, searchCriteria } = {}) {
+    const uids = await this.listMessageUids(folderPath, { limit, searchCriteria });
+    const messages = [];
+    for (const uid of uids) {
+      try {
+        const msg = await this.fetchSingleMessage(folderPath, uid);
+        messages.push(msg);
+      } catch (err) {
+        this.log('ERROR', `Failed to fetch UID ${uid}: ${err.message}`);
+      }
+    }
     this.log('CLIENT', `Fetched ${messages.length} messages from ${folderPath}`);
     return messages;
   }

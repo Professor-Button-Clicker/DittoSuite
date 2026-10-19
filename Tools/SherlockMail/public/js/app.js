@@ -2217,6 +2217,30 @@ async function wizStartCollection() {
 
   let progressInterval = null;
 
+  function formatTimeEstimate(ms) {
+    if (!ms || ms <= 0) return '';
+    const secs = Math.ceil(ms / 1000);
+    if (secs < 60) return `~${secs}s remaining`;
+    const mins = Math.floor(secs / 60);
+    const remSecs = secs % 60;
+    if (mins < 60) return remSecs > 0 ? `~${mins}m ${remSecs}s remaining` : `~${mins}m remaining`;
+    const hrs = Math.floor(mins / 60);
+    const remMins = mins % 60;
+    return remMins > 0 ? `~${hrs}h ${remMins}m remaining` : `~${hrs}h remaining`;
+  }
+
+  function formatElapsed(ms) {
+    if (!ms || ms <= 0) return '0s';
+    const secs = Math.floor(ms / 1000);
+    if (secs < 60) return `${secs}s`;
+    const mins = Math.floor(secs / 60);
+    const remSecs = secs % 60;
+    if (mins < 60) return `${mins}m ${remSecs}s`;
+    const hrs = Math.floor(mins / 60);
+    const remMins = mins % 60;
+    return `${hrs}h ${remMins}m`;
+  }
+
   function updateProgressUI(p) {
     const fill = document.getElementById('wiz-progress-fill');
     const label = document.getElementById('wiz-progress-label');
@@ -2228,21 +2252,24 @@ async function wizStartCollection() {
     const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
     fill.style.width = pct + '%';
 
+    const timeEst = formatTimeEstimate(p.estimateMs);
     let statusText = '';
     if (p.phase === 'connecting') statusText = 'Connecting to mail server...';
     else if (p.phase === 'retrying_failed') statusText = 'Retrying failed messages...';
     else if (p.phase === 'finalizing') statusText = 'Finalizing collection...';
     else if (p.retrying) statusText = `Retrying: ${p.retryItem || 'failed message'}...`;
-    else if (p.phase === 'collecting') statusText = `Collecting${p.currentFolder ? ' from ' + p.currentFolder : ''}... ${done}/${total} (${pct}%)`;
+    else if (p.phase === 'collecting') statusText = `Collecting${p.currentFolder ? ' from ' + p.currentFolder : ''}... ${done} of ${total} items (${pct}%)${timeEst ? ' — ' + timeEst : ''}`;
     else statusText = `${pct}%`;
 
     label.textContent = statusText;
 
     if (stats) {
+      const elapsed = p.startedAt ? formatElapsed(Date.now() - p.startedAt) : '';
       stats.innerHTML = `
         <div class="wiz-stat"><span>Acquired</span><strong>${p.acquired || 0}</strong></div>
         <div class="wiz-stat"><span>Failed</span><strong style="${p.failed > 0 ? 'color:var(--danger)' : ''}">${p.failed || 0}</strong></div>
         <div class="wiz-stat"><span>Skipped</span><strong>${p.skipped || 0}</strong></div>
+        ${elapsed ? `<div class="wiz-stat"><span>Elapsed</span><strong>${elapsed}</strong></div>` : ''}
       `;
     }
   }
