@@ -77,6 +77,9 @@ async function createWindow(port) {
 }
 
 app.whenReady().then(async () => {
+  if (!process.env.SHERLOCKMAIL_DATA_DIR) {
+    process.env.SHERLOCKMAIL_DATA_DIR = join(app.getPath('userData'), 'data');
+  }
   const port = await startServer();
   await createWindow(port);
 });
