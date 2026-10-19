@@ -10,6 +10,11 @@ CREATE TABLE IF NOT EXISTS projects (
   case_id TEXT,
   examiner_name TEXT,
   agency TEXT,
+  evidence_id TEXT,
+  custodian_name TEXT,
+  evidence_description TEXT,
+  client_name TEXT,
+  client_matter_no TEXT,
   legal_authority TEXT,
   legal_scope TEXT,
   status TEXT DEFAULT 'created', -- created, collecting, completed, exported, error

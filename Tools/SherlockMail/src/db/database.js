@@ -52,6 +52,11 @@ function migrate() {
   addCol('acquisitions', 'pre_search_id', 'TEXT');
   addCol('acquisitions', 'is_differential', 'INTEGER DEFAULT 0');
   addCol('acquisitions', 'source_acquisition_id', 'TEXT');
+  addCol('projects', 'evidence_id', 'TEXT');
+  addCol('projects', 'custodian_name', 'TEXT');
+  addCol('projects', 'evidence_description', 'TEXT');
+  addCol('projects', 'client_name', 'TEXT');
+  addCol('projects', 'client_matter_no', 'TEXT');
 }
 
 function rowToObj(row, columns) {
@@ -82,15 +87,17 @@ export function addAuditEntry(projectId, eventType, description, details, examin
   return hash;
 }
 
-export function createProject({ name, targetEmail, providerType, caseName, caseId, examinerName, agency, evidenceId, custodianName, legalAuthority, legalScope, config }) {
+export function createProject({ name, targetEmail, providerType, caseName, caseId, examinerName, agency, evidenceId, custodianName, evidenceDescription, clientName, clientMatterNo, legalAuthority, legalScope, config }) {
   const d = getDb();
   const id = uuidv4();
   const now = new Date().toISOString();
-  const projectConfig = { ...(config || {}), custodianName: custodianName || null, evidenceId: evidenceId || null };
-  d.prepare(`INSERT INTO projects (id, name, target_email, provider_type, case_name, case_id, examiner_name, agency, legal_authority, legal_scope, status, created_at, updated_at, config)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?, ?)`).run(
+  const projectConfig = config || {};
+  d.prepare(`INSERT INTO projects (id, name, target_email, provider_type, case_name, case_id, examiner_name, agency, evidence_id, custodian_name, evidence_description, client_name, client_matter_no, legal_authority, legal_scope, status, created_at, updated_at, config)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', ?, ?, ?)`).run(
     id, name, targetEmail, providerType, caseName || null, caseId || null,
-    examinerName || null, evidenceId || agency || null, legalAuthority || null, legalScope || null, now, now, JSON.stringify(projectConfig)
+    examinerName || null, agency || null, evidenceId || null, custodianName || null,
+    evidenceDescription || null, clientName || null, clientMatterNo || null,
+    legalAuthority || null, legalScope || null, now, now, JSON.stringify(projectConfig)
   );
   addAuditEntry(id, 'PROJECT_CREATED', `Project created for ${targetEmail}`, {
     targetEmail, providerType, caseId, evidenceId, custodianName

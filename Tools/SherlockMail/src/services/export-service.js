@@ -248,7 +248,15 @@ export class ExportService {
     const manifestPath = path.join(outputDir, 'manifest.txt');
     fs.writeFileSync(manifestPath, manifest.text, 'utf8');
 
-    return { files, manifest, outputDir };
+    const sessionManifest = this.generateSessionManifest(projectId, exportId, format, messages, files, options);
+    const sessionManifestPath = path.join(outputDir, 'session_manifest.xml');
+    fs.writeFileSync(sessionManifestPath, sessionManifest.content, 'utf8');
+
+    const metadataCsv = this.generateMetadataCsv(messages);
+    const metadataCsvPath = path.join(outputDir, 'metadata.csv');
+    fs.writeFileSync(metadataCsvPath, metadataCsv.content, 'utf8');
+
+    return { files, manifest, sessionManifest, metadataCsv, outputDir };
   }
 
   static generateEml(message) {
@@ -845,6 +853,129 @@ ${msgElements}
       hash: crypto.createHash('sha256').update(content).digest('hex'),
       size: Buffer.byteLength(content),
       messageCount: messages.length,
+    };
+  }
+
+  static generateSessionManifest(projectId, exportId, format, messages, exportedFiles, options = {}) {
+    const x = escHtml;
+    const now = new Date().toISOString();
+    const project = options.project || {};
+    const acquisition = options.acquisition || {};
+    const totalBytes = exportedFiles.reduce((sum, f) => sum + (f.size || 0), 0);
+    const folders = [...new Set(messages.map(m => m.folder || m.folder_path || 'INBOX'))];
+    const attachmentCount = messages.reduce((sum, m) => sum + (m.attachment_count || m.attachmentCount || 0), 0);
+
+    const fileEntries = exportedFiles.map((f, i) => {
+      const fname = f.relativePath || f.filename;
+      return `    <File seq="${i + 1}">
+      <Name>${x(fname)}</Name>
+      <Size>${f.size || 0}</Size>
+      <SHA256>${x(f.hash || '')}</SHA256>
+    </File>`;
+    }).join('\n');
+
+    const content = `<?xml version="1.0" encoding="UTF-8"?>
+<SessionManifest xmlns="urn:sherlockmail:manifest:1.0" version="1.0">
+  <GeneratedAt>${x(now)}</GeneratedAt>
+  <Tool>SherlockMail v0.9.0</Tool>
+  <CaseInformation>
+    <CaseName>${x(project.case_name || project.caseName || '')}</CaseName>
+    <CaseId>${x(project.case_id || project.caseId || '')}</CaseId>
+    <ExaminerName>${x(project.examiner_name || project.examinerName || '')}</ExaminerName>
+    <Agency>${x(project.agency || '')}</Agency>
+    <EvidenceId>${x(project.evidence_id || project.evidenceId || '')}</EvidenceId>
+    <CustodianFullName>${x(project.custodian_name || project.custodianName || '')}</CustodianFullName>
+    <EvidenceDescription>${x(project.evidence_description || project.evidenceDescription || '')}</EvidenceDescription>
+    <ClientName>${x(project.client_name || project.clientName || '')}</ClientName>
+    <ClientMatterNo>${x(project.client_matter_no || project.clientMatterNo || '')}</ClientMatterNo>
+  </CaseInformation>
+  <CollectionParameters>
+    <TargetEmail>${x(project.target_email || project.targetEmail || '')}</TargetEmail>
+    <ProviderType>${x(project.provider_type || project.providerType || '')}</ProviderType>
+    <Protocol>${x(options.protocol || project.provider_type || project.providerType || '')}</Protocol>
+    <FoldersCollected>${folders.length}</FoldersCollected>
+    <Folders>
+${folders.map(f => `      <Folder>${x(f)}</Folder>`).join('\n')}
+    </Folders>
+  </CollectionParameters>
+  <SessionStatistics>
+    <StartedAt>${x(acquisition.started_at || acquisition.startedAt || '')}</StartedAt>
+    <CompletedAt>${x(acquisition.completed_at || acquisition.completedAt || now)}</CompletedAt>
+    <TotalMessages>${messages.length}</TotalMessages>
+    <TotalAttachments>${attachmentCount}</TotalAttachments>
+    <TotalSize>${totalBytes}</TotalSize>
+    <ExportFormat>${x(format)}</ExportFormat>
+    <ExportId>${x(exportId || '')}</ExportId>
+    <FileCount>${exportedFiles.length}</FileCount>
+  </SessionStatistics>
+  <ExportedFiles>
+${fileEntries}
+  </ExportedFiles>
+  <Integrity>
+    <HashAlgorithm>SHA-256</HashAlgorithm>
+    <ManifestHash>${crypto.createHash('sha256').update(fileEntries).digest('hex')}</ManifestHash>
+  </Integrity>
+</SessionManifest>
+`;
+
+    return {
+      content,
+      filename: 'session_manifest.xml',
+      hash: crypto.createHash('sha256').update(content).digest('hex'),
+      size: Buffer.byteLength(content),
+    };
+  }
+
+  static generateMetadataCsv(messages) {
+    const csvEscape = (val) => {
+      const s = String(val ?? '');
+      if (s.includes('"') || s.includes(',') || s.includes('\n') || s.includes('\r')) {
+        return '"' + s.replace(/"/g, '""') + '"';
+      }
+      return s;
+    };
+    const joinField = (val) => {
+      const arr = parseJsonField(val, []);
+      return Array.isArray(arr) ? arr.join('; ') : String(arr);
+    };
+
+    const columns = [
+      'Subject', 'From', 'To', 'CC', 'BCC', 'DateSent', 'DateReceived',
+      'Folder', 'Size', 'MessageID', 'InReplyTo', 'HasAttachments',
+      'AttachmentCount', 'ContentType', 'SHA256', 'MD5', 'AcquiredAt',
+    ];
+
+    const rows = [columns.join(',')];
+    for (const msg of messages) {
+      const row = [
+        csvEscape(msg.subject || ''),
+        csvEscape(msg.from_address || msg.fromAddress || ''),
+        csvEscape(joinField(msg.to_addresses || msg.toAddresses)),
+        csvEscape(joinField(msg.cc_addresses || msg.ccAddresses)),
+        csvEscape(joinField(msg.bcc_addresses || msg.bccAddresses)),
+        csvEscape(msg.date || ''),
+        csvEscape(msg.acquired_at || ''),
+        csvEscape(msg.folder || msg.folder_path || ''),
+        msg.size || 0,
+        csvEscape(msg.message_id || msg.messageId || ''),
+        csvEscape(msg.in_reply_to || msg.inReplyTo || ''),
+        (msg.has_attachments || msg.hasAttachments) ? 'TRUE' : 'FALSE',
+        msg.attachment_count || msg.attachmentCount || 0,
+        csvEscape(msg.content_type || msg.contentType || ''),
+        csvEscape(msg.hash_sha256 || msg.hashSha256 || ''),
+        csvEscape(msg.hash_md5 || msg.hashMd5 || ''),
+        csvEscape(msg.acquired_at || ''),
+      ];
+      rows.push(row.join(','));
+    }
+
+    const content = rows.join('\r\n') + '\r\n';
+    return {
+      content,
+      filename: 'metadata.csv',
+      hash: crypto.createHash('sha256').update(content).digest('hex'),
+      size: Buffer.byteLength(content),
+      rowCount: messages.length,
     };
   }
 

@@ -1496,7 +1496,9 @@ router.post('/projects/:id/export', (req, res) => {
 
   try {
     const exportId = crypto.randomUUID();
-    const options = { provider: project.provider_type || 'Unknown', preserveFolders: req.body.preserveFolders };
+    const acquisitions = getAcquisitions(project.id);
+    const latestAcquisition = acquisitions.length ? acquisitions[0] : {};
+    const options = { provider: project.provider_type || 'Unknown', preserveFolders: req.body.preserveFolders, project, acquisition: latestAcquisition };
     if (pdfSplitMode) options.pdfSplitMode = pdfSplitMode;
     const { files, manifest, outputDir } = ExportService.exportToFiles(project.id, exportId, format, messages, folders, customOutputDir, options);
 
