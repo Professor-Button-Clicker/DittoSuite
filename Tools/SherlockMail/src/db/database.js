@@ -61,6 +61,8 @@ function migrate() {
   addCol('acquisitions', 'completion_type', 'TEXT');
   addCol('acquisitions', 'session_dir', 'TEXT');
   addCol('messages', 'internal_date', 'TEXT');
+  addCol('messages', 'folder_paths', 'TEXT');
+  addCol('messages', 'labels', 'TEXT');
 }
 
 function rowToObj(row, columns) {
@@ -252,8 +254,8 @@ function cachedStmt(sql) {
   return s;
 }
 
-const SAVE_MESSAGE_SQL = `INSERT OR REPLACE INTO messages (id, acquisition_id, project_id, uid, service_id, folder, subject, from_address, to_addresses, cc_addresses, bcc_addresses, date, message_id, in_reply_to, size, flags, has_attachments, attachment_count, content_type, hash_md5, hash_sha256, hash_sha512, eml_path, acquired_at, headers_json, is_encrypted, is_signed, body_text, body_html, internal_date)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+const SAVE_MESSAGE_SQL = `INSERT OR REPLACE INTO messages (id, acquisition_id, project_id, uid, service_id, folder, subject, from_address, to_addresses, cc_addresses, bcc_addresses, date, message_id, in_reply_to, size, flags, has_attachments, attachment_count, content_type, hash_md5, hash_sha256, hash_sha512, eml_path, acquired_at, headers_json, is_encrypted, is_signed, body_text, body_html, internal_date, folder_paths, labels)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 export function saveMessage(msg) {
   const id = msg.id || uuidv4();
@@ -266,7 +268,8 @@ export function saveMessage(msg) {
     msg.contentType || 'text/plain', msg.hashMd5 || null, msg.hashSha256 || null,
     msg.hashSha512 || null, msg.emlPath || null, new Date().toISOString(),
     JSON.stringify(msg.headers || {}), msg.isEncrypted ? 1 : 0, msg.isSigned ? 1 : 0,
-    msg.bodyText || null, msg.bodyHtml || null, msg.internalDate || null
+    msg.bodyText || null, msg.bodyHtml || null, msg.internalDate || null,
+    JSON.stringify(msg.folderPaths || [msg.folder]), msg.gmailLabels ? JSON.stringify(msg.gmailLabels) : null
   );
   return id;
 }

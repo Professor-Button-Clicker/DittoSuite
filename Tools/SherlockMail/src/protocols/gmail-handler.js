@@ -3,6 +3,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { google } from 'googleapis';
 import { getOAuth2Client, getAuthStatus } from '../services/google-oauth.js';
 
+const ALL_MAIL_NAME = 'All Mail';
+const ALL_MAIL_ID = 'ALL_MAIL';
+
 export class GmailHandler {
   constructor(config) {
     this.config = config;
@@ -52,8 +55,21 @@ export class GmailHandler {
     const res = await this.gmail.users.labels.list({ userId: 'me' });
     const labels = res.data.labels || [];
 
-    const details = await Promise.all(labels.map(label => this.gmail.users.labels.get({ userId: 'me', id: label.id })));
-    const folders = [];
+    const [details, profile] = await Promise.all([
+      Promise.all(labels.map(label => this.gmail.users.labels.get({ userId: 'me', id: label.id }))),
+      this.gmail.users.getProfile({ userId: 'me' }),
+    ]);
+    const folders = [{
+      id: uuidv4(),
+      path: ALL_MAIL_NAME,
+      name: ALL_MAIL_NAME,
+      gmailLabelId: ALL_MAIL_ID,
+      totalMessages: profile.data.messagesTotal || 0,
+      unseenMessages: 0,
+      flags: ['system'],
+      delimiter: '/',
+      parentPath: null,
+    }];
     for (const detail of details) {
       const d = detail.data;
       folders.push({
@@ -158,15 +174,21 @@ export class GmailHandler {
     }
   }
 
-  async resolveLabelId(folder) {
-    if (!this.labelIds) {
-      const res = await this.call(() => this.gmail.users.labels.list({ userId: 'me' }));
-      this.labelIds = new Map();
-      for (const l of res.data.labels || []) {
-        this.labelIds.set(l.id, l.id);
-        this.labelIds.set(l.name, l.id);
-      }
+  async loadLabelMaps() {
+    if (this.labelIds) return;
+    const res = await this.call(() => this.gmail.users.labels.list({ userId: 'me' }));
+    this.labelIds = new Map();
+    this.labelNames = new Map();
+    for (const l of res.data.labels || []) {
+      this.labelIds.set(l.id, l.id);
+      this.labelIds.set(l.name, l.id);
+      this.labelNames.set(l.id, l.name);
     }
+  }
+
+  async resolveLabelId(folder) {
+    if (String(folder).toLowerCase() === ALL_MAIL_NAME.toLowerCase() || folder === ALL_MAIL_ID) return ALL_MAIL_ID;
+    await this.loadLabelMaps();
     const id = this.labelIds.get(folder) || this.labelIds.get(String(folder).toUpperCase());
     if (!id) {
       const err = new Error(`Gmail label "${folder}" not found`);
@@ -178,14 +200,16 @@ export class GmailHandler {
 
   async enumerate(folder, { limit, searchCriteria } = {}) {
     const labelId = await this.resolveLabelId(folder);
+    const allMail = labelId === ALL_MAIL_ID;
     const ids = [];
     let pageToken;
     do {
       const res = await this.call(() => this.gmail.users.messages.list({
         userId: 'me',
-        labelIds: [labelId],
+        // All Mail mirrors Gmail's IMAP "[Gmail]/All Mail": every message, archived ones included, but not Spam or Trash.
+        labelIds: allMail ? undefined : [labelId],
         maxResults: 500,
-        includeSpamTrash: true,
+        includeSpamTrash: !allMail,
         q: typeof searchCriteria === 'string' && searchCriteria ? searchCriteria : undefined,
         pageToken,
         fields: 'messages/id,nextPageToken',
@@ -194,22 +218,25 @@ export class GmailHandler {
       pageToken = res.data.nextPageToken;
     } while (pageToken && !(limit > 0 && ids.length >= limit));
     const selected = limit > 0 ? ids.slice(0, limit) : ids;
-    this.log('CLIENT', `Enumerated ${selected.length} messages in label ${folder} (${labelId})`);
-    return { key: labelId, refs: selected.map((id, i) => ({ key: id, uid: i + 1, serviceId: id })) };
+    this.log('CLIENT', `Enumerated ${selected.length} messages in ${allMail ? 'All Mail' : `label ${folder} (${labelId})`}`);
+    return { key: labelId, refs: selected.map((id, i) => ({ key: id, uid: i + 1, serviceId: id, globalKey: `gmail:${id}` })) };
   }
 
   async fetchBatch(_labelId, refs, deliver) {
+    await this.loadLabelMaps();
     const out = [];
     const emit = deliver || (item => out.push(item));
     for (const ref of refs) {
       const res = await this.call(() => this.gmail.users.messages.get({
         userId: 'me', id: ref.key, format: 'raw', fields: 'id,threadId,labelIds,internalDate,raw',
       }));
+      const labelIds = res.data.labelIds || [];
       emit({
         ref,
         raw: Buffer.from(res.data.raw, 'base64url'),
         meta: {
-          flags: res.data.labelIds || [],
+          flags: labelIds,
+          gmailLabels: labelIds.map(id => this.labelNames.get(id) || id),
           internalDate: res.data.internalDate ? new Date(parseInt(res.data.internalDate, 10)).toISOString() : null,
         },
       });

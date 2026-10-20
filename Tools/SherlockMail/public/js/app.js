@@ -2515,6 +2515,11 @@ function wizShowResults(result) {
       <div class="stat-card"><div class="stat-label">Total Size</div><div class="stat-value" style="font-size:20px">${formatBytes(result.totalBytes)}</div></div>
       <div class="stat-card"><div class="stat-label">Status</div><div class="stat-value" style="font-size:14px">${esc(completionLabel)}</div></div>
     </div>
+    ${result.duplicatesMerged ? `
+      <div style="margin-top:12px;font-size:12px;color:var(--text-secondary)">
+        ${result.duplicatesMerged} copies of messages that appear under more than one Gmail label or folder were merged:
+        each message was collected once, and every folder and label it belongs to is recorded with it.
+      </div>` : ''}
     ${result.sessionDir ? `
       <div style="margin-top:16px;padding:12px;background:var(--bg-raised);border:1px solid var(--border);border-radius:var(--radius)">
         <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px">Session Output</div>

@@ -197,6 +197,49 @@ function startRateTracker(progress, onTick) {
   return () => clearInterval(timer);
 }
 
+// Lower rank = better home for a message that appears under several Gmail labels or folders.
+function folderRank(folder) {
+  const f = String(folder).replace(/^\[Gmail\]\//i, '').toLowerCase();
+  if (f === 'inbox') return 0;
+  if (/^sent( mail)?$/.test(f)) return 1;
+  if (/^drafts?$/.test(f)) return 2;
+  if (f === 'chat' || f === 'chats') return 3;
+  if (f === 'spam' || f === 'junk') return 4;
+  if (f === 'trash' || f === 'bin') return 5;
+  if (f === 'all mail' || f === 'all_mail') return 9;
+  if (/^(important|starred|unread)$/.test(f) || f.startsWith('category_')) return 8;
+  return 6;
+}
+
+// Gmail labels are tags on one message, not copies: refs sharing a globalKey are collected once,
+// filed under their best folder, and keep the full list of folders/labels they appeared in.
+function mergeLabelDuplicates(listings) {
+  const groups = new Map();
+  for (const listing of listings) {
+    for (const ref of listing.refs) {
+      if (!ref.globalKey) continue;
+      const rank = folderRank(listing.folder);
+      const g = groups.get(ref.globalKey);
+      if (!g) groups.set(ref.globalKey, { ref, rank, folders: [listing.folder] });
+      else {
+        g.folders.push(listing.folder);
+        if (rank < g.rank) { g.ref = ref; g.rank = rank; }
+      }
+    }
+  }
+  let merged = 0;
+  for (const listing of listings) {
+    listing.refs = listing.refs.filter(ref => {
+      if (!ref.globalKey) return true;
+      const g = groups.get(ref.globalKey);
+      if (g.ref !== ref) { merged++; return false; }
+      ref.folderPaths = [listing.folder, ...g.folders.filter(f => f !== listing.folder)];
+      return true;
+    });
+  }
+  return merged;
+}
+
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -239,19 +282,26 @@ export async function runCollection({
     progress.phase = 'enumerating';
     const queue = [];
     const folderTotals = {};
+    const listings = [];
     for (const folder of folders) {
       if (signal?.aborted) break;
       progress.currentFolder = folder;
       try {
         const { key, refs } = await withRetry(() => primary.enumerate(folder, { limit, searchCriteria }), { attempts: 3 });
-        folderTotals[folder] = refs.length;
+        listings.push({ folder, key, refs });
         progress.total += refs.length;
-        shuffle(refs);
-        for (const batch of makeBatches(refs, profile.batchSize, profile.batchBytes)) queue.push({ folder, key, refs: batch });
       } catch (err) {
         folderTotals[folder] = 0;
         onFolderError?.(folder, err);
       }
+    }
+    progress.duplicatesMerged = mergeLabelDuplicates(listings);
+    progress.total = 0;
+    for (const { folder, key, refs } of listings) {
+      folderTotals[folder] = refs.length;
+      progress.total += refs.length;
+      shuffle(refs);
+      for (const batch of makeBatches(refs, profile.batchSize, profile.batchBytes)) queue.push({ folder, key, refs: batch });
     }
     // Random order keeps throughput stationary: mailboxes cluster large attachments by folder and date,
     // so collecting in server order makes any rate-based ETA wrong until the clusters are reached.
@@ -285,6 +335,7 @@ export async function runCollection({
           uid: item.ref.uid,
           serviceId: item.ref.serviceId || null,
           folder: job.folder,
+          folderPaths: item.ref.folderPaths || [job.folder],
           ...item.meta,
         });
         await onRecord(msg, job.folder);

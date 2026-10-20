@@ -85,21 +85,49 @@ export class ImapHandler {
     return this.client.mailbox;
   }
 
+  // Gmail exposes labels as IMAP folders, so one message appears in several of them.
+  isGmail() {
+    return !!this.client?.capabilities?.has('X-GM-EXT-1');
+  }
+
+  async isNonSelectable(folderPath) {
+    const entry = (await this.client.list()).find(f => f.path === folderPath);
+    return !!entry && [...(entry.flags || [])].some(f => /^\\(Noselect|NonExistent)$/i.test(f));
+  }
+
   async enumerate(folderPath, { limit, searchCriteria } = {}) {
     await this.ensureConnected();
-    const box = await this.openReadOnly(folderPath);
+    let box;
+    try {
+      box = await this.openReadOnly(folderPath);
+    } catch (err) {
+      if (await this.isNonSelectable(folderPath).catch(() => false)) {
+        this.log('CLIENT', `Skipped ${folderPath}: container folder that cannot hold messages`);
+        return { key: folderPath, refs: [] };
+      }
+      throw err;
+    }
     let uids = box.exists > 0 ? await this.client.search(searchCriteria || { all: true }, { uid: true }) : [];
     uids = (uids || []).sort((a, b) => a - b);
     if (limit > 0) uids = uids.slice(0, limit);
-    const sizes = new Map();
+    const info = new Map();
     if (uids.length) {
       const wanted = new Set(uids);
       for await (const m of this.client.fetch(`${uids[0]}:${uids[uids.length - 1]}`, { uid: true, size: true }, { uid: true })) {
-        if (wanted.has(m.uid)) sizes.set(m.uid, m.size);
+        if (wanted.has(m.uid)) info.set(m.uid, m);
       }
     }
+    const gmail = this.isGmail();
     this.log('CLIENT', `Enumerated ${uids.length} UIDs in ${folderPath} (EXISTS ${box.exists}, UIDVALIDITY ${box.uidValidity})`);
-    return { key: folderPath, refs: uids.map(uid => ({ key: String(uid), uid, size: sizes.get(uid) || 0 })) };
+    return {
+      key: folderPath,
+      refs: uids.map(uid => {
+        const m = info.get(uid);
+        const ref = { key: String(uid), uid, size: m?.size || 0 };
+        if (gmail && m?.emailId) { ref.globalKey = `gmail:${m.emailId}`; ref.serviceId = m.emailId; }
+        return ref;
+      }),
+    };
   }
 
   async fetchBatch(folderPath, refs, deliver) {
@@ -107,7 +135,8 @@ export class ImapHandler {
     const byUid = new Map(refs.map(r => [r.uid, r]));
     const out = [];
     const emit = deliver || (item => out.push(item));
-    const query = { uid: true, flags: true, internalDate: true, source: true };
+    const gmail = this.isGmail();
+    const query = { uid: true, flags: true, internalDate: true, source: true, labels: gmail };
     for await (const m of this.client.fetch(compactUidSet(byUid.keys()), query, { uid: true })) {
       const ref = byUid.get(m.uid);
       if (!ref || !m.source) continue;
@@ -117,6 +146,7 @@ export class ImapHandler {
         meta: {
           flags: m.flags ? [...m.flags] : [],
           internalDate: m.internalDate ? new Date(m.internalDate).toISOString() : null,
+          ...(gmail && m.labels ? { gmailLabels: [...m.labels] } : {}),
         },
       });
     }
@@ -130,15 +160,19 @@ export class ImapHandler {
     const flatten = (items, parentPath) => {
       for (const item of items) {
         const path = item.path || item.name;
-        folders.push({
-          id: uuidv4(),
-          path,
-          name: item.name,
-          delimiter: item.delimiter || '/',
-          flags: item.flags || [],
-          specialUse: item.specialUse || null,
-          parentPath,
-        });
+        const flags = [...(item.flags || [])];
+        // Containers such as Gmail's "[Gmail]" hold no messages and fail to open; list only their children.
+        if (!flags.some(f => /^\\(Noselect|NonExistent)$/i.test(f))) {
+          folders.push({
+            id: uuidv4(),
+            path,
+            name: item.name,
+            delimiter: item.delimiter || '/',
+            flags,
+            specialUse: item.specialUse || null,
+            parentPath,
+          });
+        }
         if (item.folders?.length) {
           flatten(item.folders, path);
         }
@@ -148,11 +182,6 @@ export class ImapHandler {
     flatten(tree.folders || [], null);
 
     for (const folder of folders) {
-      if (folder.flags instanceof Set ? folder.flags.has('\\Noselect') : (folder.flags || []).includes('\\Noselect')) {
-        folder.totalMessages = 0;
-        folder.unseenMessages = 0;
-        continue;
-      }
       try {
         const st = await this.client.status(folder.path, { messages: true, unseen: true });
         folder.totalMessages = st.messages || 0;

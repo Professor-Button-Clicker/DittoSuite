@@ -191,6 +191,7 @@ function writeAcquisitionLogs(logsDir, sessionName, ad) {
     ``,
     `Results:`,
     `  Total messages found: ${ad.totalFound}`,
+    ...(ad.duplicatesMerged ? [`  Label/folder duplicates merged: ${ad.duplicatesMerged} (each Gmail message collected once, with all its folders and labels recorded)`] : []),
     `  Downloaded: ${ad.acquired}`,
     `  Skipped (differential): ${ad.skipped}`,
     `  Failed: ${ad.failed}`,
@@ -218,10 +219,11 @@ function writeAcquisitionLogs(logsDir, sessionName, ad) {
   }
 
   if (ad.downloadedItems.length > 0) {
-    const hdr = 'UID,MessageId,Folder,Subject,From,Date,Size,HashSHA256,EmlPath';
+    const hdr = 'UID,MessageId,Folder,AllFolders,Labels,Subject,From,Date,Size,HashSHA256,EmlPath';
+    const quote = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const rows = ad.downloadedItems.map(m =>
-      [m.uid, m.messageId, m.folder, `"${(m.subject || '').replace(/"/g, '""')}"`,
-       m.fromAddress, m.date, m.size, m.hashSha256, m.emlPath || ''].join(',')
+      [m.uid, m.messageId, m.folder, quote((m.folderPaths || [m.folder]).join('; ')), quote((m.gmailLabels || []).join('; ')),
+       quote(m.subject), m.fromAddress, m.date, m.size, m.hashSha256, m.emlPath || ''].join(',')
     );
     fs.writeFileSync(path.join(logsDir, `downloaded_items_${ts}.csv`), [hdr, ...rows].join('\n'));
   }
@@ -841,6 +843,7 @@ function createCollectionSink({ projectId, acquisitionId, mimeDir, differential,
     downloadedItems.push({
       id: msg.id, uid: msg.uid, messageId: msg.messageId, folder, subject: msg.subject,
       fromAddress: msg.fromAddress, date: msg.date, size: msg.size, hashSha256: msg.hashSha256, emlPath: filePath,
+      folderPaths: msg.folderPaths, gmailLabels: msg.gmailLabels,
     });
     stats.acquired++;
     progress.acquired++;
@@ -1072,6 +1075,7 @@ router.post('/projects/:id/collect', async (req, res) => {
       protocol: project.provider_type,
       targetEmail: project.target_email,
       totalFound,
+      duplicatesMerged: progress.duplicatesMerged || 0,
       acquired: allMessages.length,
       skipped: skippedCount,
       failed: failedCount,
@@ -1128,6 +1132,7 @@ router.post('/projects/:id/collect', async (req, res) => {
       status,
       completionType,
       messageCount: allMessages.length,
+      duplicatesMerged: progress.duplicatesMerged || 0,
       skippedCount,
       failedCount,
       differential: !!differential,
