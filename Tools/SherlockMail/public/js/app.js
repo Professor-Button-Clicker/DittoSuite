@@ -2402,6 +2402,7 @@ async function wizStartCollection() {
         folders: wizSelectedFolders.length > 0 ? wizSelectedFolders : undefined,
         config: wizConnection,
         differential,
+        outputDir: wizOutputDir || undefined,
       }
     });
 
@@ -2499,10 +2500,11 @@ function wizShowResults(result) {
           <code style="font-size:11px;color:var(--accent)">${esc(result.mimeOutputDir || '')}</code>
         </div>
         ${result.logFiles && result.logFiles.length > 0 ? `
-          <div style="display:flex;align-items:center;gap:8px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
             <span style="font-size:12px;color:var(--text-muted)">Logs:</span>
-            <span style="font-size:11px;color:var(--text-secondary)">${result.logFiles.join(', ')}</span>
+            <code style="font-size:11px;color:var(--accent)">${esc(result.logsDir || '')}</code>
           </div>
+          <div style="font-size:11px;color:var(--text-secondary)">${result.logFiles.map(esc).join(', ')}</div>
         ` : ''}
       </div>
     ` : ''}

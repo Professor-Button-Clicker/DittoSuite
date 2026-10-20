@@ -107,10 +107,11 @@ function sanitizeFolderName(folderPath) {
   return folderPath.replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim() || 'INBOX';
 }
 
-function createSessionOutputDir(projectId, sessionName) {
+function createSessionOutputDir(projectId, sessionName, destinationDir) {
   const sessionDir = path.join(DATA_DIR, 'projects', projectId, 'sessions', sessionName);
   const mimeDir = path.join(sessionDir, 'MIME');
-  const logsDir = path.join(sessionDir, 'Logs');
+  // Logs go next to the exported evidence in the examiner's chosen destination, when one is set.
+  const logsDir = destinationDir ? path.join(destinationDir, 'Logs') : path.join(sessionDir, 'Logs');
   fs.mkdirSync(mimeDir, { recursive: true });
   fs.mkdirSync(logsDir, { recursive: true });
   return { sessionDir, mimeDir, logsDir };
@@ -882,13 +883,24 @@ router.post('/projects/:id/collect', async (req, res) => {
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
   const { folders: selectedFolders, searchQuery, config, differential } = req.body;
+  const destinationDir = typeof req.body.outputDir === 'string' && req.body.outputDir.trim() ? req.body.outputDir.trim() : null;
   const limit = req.body.limit || 0;
   const batchSize = req.body.batchSize || 500;
-  const acquisitionId = createAcquisition(project.id, selectedFolders);
-  updateProjectStatus(project.id, 'collecting');
 
   const sessionName = `${(project.name || project.id).replace(/[<>:"/\\|?*]/g, '_')}_${new Date().toISOString().replace(/[:.]/g, '-')}`;
-  const { sessionDir, mimeDir, logsDir } = createSessionOutputDir(project.id, sessionName);
+  // A missing drive root (e.g. an unplugged evidence drive) makes a recursive mkdirSync hang on Windows.
+  if (destinationDir && !fs.existsSync(path.parse(path.resolve(destinationDir)).root)) {
+    return res.status(400).json({ error: `Destination drive for ${destinationDir} is not available. Connect the drive or choose another destination.` });
+  }
+  let sessionDir, mimeDir, logsDir;
+  try {
+    ({ sessionDir, mimeDir, logsDir } = createSessionOutputDir(project.id, sessionName, destinationDir));
+  } catch (err) {
+    return res.status(400).json({ error: `Cannot create the log folder in the destination ${destinationDir || sessionName}: ${err.message}` });
+  }
+
+  const acquisitionId = createAcquisition(project.id, selectedFolders);
+  updateProjectStatus(project.id, 'collecting');
 
   const diskCheck = await checkDiskSpace(DATA_DIR);
   if (!diskCheck.ok) {
@@ -1098,6 +1110,7 @@ router.post('/projects/:id/collect', async (req, res) => {
       protocol: project.provider_type,
       completionType,
       sessionDir,
+      logsDir: logResult.logsDir,
       logFiles: logResult.files,
       errors: errors.slice(0, 50),
     }, project.examiner_name, acquisitionId);
@@ -1122,6 +1135,7 @@ router.post('/projects/:id/collect', async (req, res) => {
       folderStats,
       sessionDir,
       mimeOutputDir: mimeDir,
+      logsDir: logResult.logsDir,
       logFiles: logResult.files,
       errors: errors.slice(0, 50),
       protocolLog: handler?.getProtocolLog() || [],
