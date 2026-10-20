@@ -778,6 +778,50 @@ function processMessageItem(msg, projectId, acquisitionId, existingIds, differen
   }
 }
 
+// Written as the collection runs (not only at the end), so a run that stalls or is killed
+// still leaves a record of how far it got and what it was waiting on.
+function createLiveLog(logsDir) {
+  const file = path.join(logsDir, `collection_live_${new Date().toISOString().replace(/[:.]/g, '-')}.log`);
+  let stream = null;
+  try {
+    stream = fs.createWriteStream(file, { flags: 'a' });
+    stream.on('error', () => { stream = null; });
+  } catch {
+    stream = null;
+  }
+  return {
+    file,
+    write(line) { stream?.write(`${new Date().toISOString()}  ${line}\n`); },
+    close() { stream?.end(); stream = null; },
+  };
+}
+
+function describeTarget(protocol, config) {
+  if (protocol === 'imap' || protocol === 'pop3') return `${config?.host}:${config?.port || (protocol === 'imap' ? 993 : 995)}`;
+  if (protocol === 'gmail_api') return 'Gmail API (gmail.googleapis.com)';
+  if (protocol === 'graph') return 'Microsoft Graph (graph.microsoft.com)';
+  if (protocol === 'ews') return config?.ewsUrl || 'Exchange Web Services (autodiscover)';
+  return protocol;
+}
+
+async function connectWithStatus(handler, progress, target, live) {
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    progress.statusDetail = `Connecting to ${target} (attempt ${attempt} of ${MAX_RETRIES})`;
+    live.write(progress.statusDetail);
+    try {
+      await handler.connect();
+      live.write(`Connected to ${target}`);
+      progress.statusDetail = '';
+      return;
+    } catch (err) {
+      progress.lastError = err.message;
+      live.write(`Connection attempt ${attempt} failed: ${err.message}`);
+      if (attempt === MAX_RETRIES) throw err;
+      await new Promise(r => setTimeout(r, RETRY_BASE_DELAY_MS * 2 ** (attempt - 1)));
+    }
+  }
+}
+
 const DB_FLUSH_SIZE = 200;
 const DB_FLUSH_INTERVAL_MS = 2000;
 
@@ -919,6 +963,7 @@ router.post('/projects/:id/collect', async (req, res) => {
   const startedAt = new Date().toISOString();
 
   let handler;
+  let live = { file: null, write() {}, close() {} };
   try {
     const allMessages = [];
     let skippedCount = 0;
@@ -952,9 +997,26 @@ router.post('/projects/:id/collect', async (req, res) => {
     const effectiveProtocol = config?.protocol || project.provider_type;
 
     if (supportsEngine(effectiveProtocol)) {
+      const target = describeTarget(effectiveProtocol, config);
+      live = createLiveLog(logsDir);
+      progress.liveLogFile = live.file;
+      live.write(`Collection started: project "${project.name}", protocol ${effectiveProtocol}, target ${target}, ${targetFolders.length} folder(s): ${targetFolders.join(', ')}`);
+      live.write(`Output: session ${sessionDir}, logs ${logsDir}`);
       handler = await createEngineHandler(effectiveProtocol, config, project);
       progress.phase = 'connecting';
-      await retryWithBackoff(() => handler.connect());
+      await connectWithStatus(handler, progress, target, live);
+
+      let lastLogged = '';
+      let lastHeartbeat = 0;
+      const logTick = () => {
+        const done = progress.acquired + progress.failed + progress.skipped;
+        const state = `${progress.phase} | ${progress.statusDetail || progress.currentFolder || ''}`;
+        if (state !== lastLogged) { live.write(`Phase: ${state}`); lastLogged = state; }
+        if (Date.now() - lastHeartbeat >= 15000) {
+          lastHeartbeat = Date.now();
+          live.write(`Progress: ${done}/${progress.total} (acquired ${progress.acquired}, failed ${progress.failed}, skipped ${progress.skipped}), ${progress.itemsPerSec || 0} items/s, ETA ${progress.estimateMs != null ? Math.round(progress.estimateMs / 1000) + 's' : 'n/a'}`);
+        }
+      };
 
       const itemEvent = (status, folder, fields) => publishCollectEvent(project.id, {
         type: 'item', status, folder, ...fields,
@@ -990,17 +1052,25 @@ router.post('/projects/:id/collect', async (req, res) => {
               timestamp: new Date().toISOString(), type: stage === 'fetch' ? 'message_fetch_error' : 'message_error',
             });
             pushProgressError(`${folder} #${ref?.uid ?? '?'}: ${error.message}`);
+            progress.lastError = `${folder} #${ref?.uid ?? '?'}: ${error.message}`;
+            live.write(`Item failed (${stage}): ${folder} #${ref?.uid ?? '?'}: ${error.message}`);
             itemEvent('failed', folder, { uid: ref?.uid, error: error.message });
           },
           onFolderError: (folder, err) => {
             errors.push({ folder, error: err.message, timestamp: new Date().toISOString(), type: 'folder_error' });
             pushProgressError(`${folder}: ${err.message}`);
+            progress.lastError = `${folder}: ${err.message}`;
+            live.write(`Folder failed: ${folder}: ${err.message}`);
           },
-          onTick: () => publishCollectEvent(project.id, { type: 'progress', progress: progressSnapshot(progress) }),
+          onTick: () => {
+            logTick();
+            publishCollectEvent(project.id, { type: 'progress', progress: progressSnapshot(progress) });
+          },
         });
       } finally {
         sink.flush();
       }
+      live.write(`Download finished: ${progress.acquired} acquired, ${progress.failed} failed, ${progress.skipped} skipped, ${progress.duplicatesMerged || 0} label copies merged`);
 
       for (const item of downloadedItems) allMessages.push(item);
       skippedCount = progress.skipped;
@@ -1126,6 +1196,8 @@ router.post('/projects/:id/collect', async (req, res) => {
     progress.phase = 'complete';
     progress.estimateMs = 0;
     publishCollectEvent(project.id, { type: 'progress', progress: progressSnapshot(progress) });
+    live.write(`Collection complete: ${completionType}`);
+    live.close();
 
     res.json({
       acquisitionId,
@@ -1147,9 +1219,12 @@ router.post('/projects/:id/collect', async (req, res) => {
       timestamp: tsResult.timestamp.genTime,
     });
   } catch (err) {
+    live.write(`Collection failed: ${err.message}`);
+    live.close();
     await handler?.disconnect().catch(() => {});
     progress.active = false;
     progress.phase = 'error';
+    progress.lastError = err.message;
     progress.errors.push(err.message);
     collectionProgress.set(project.id, progress);
     publishCollectEvent(project.id, { type: 'progress', progress: progressSnapshot(progress) });

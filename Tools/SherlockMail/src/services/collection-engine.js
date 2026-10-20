@@ -36,6 +36,7 @@ export function supportsEngine(protocol) {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const EXTRA_CONNECTION_WAIT_MS = 20000;
 const MAX_RETRY_AFTER_MS = 120000;
 
 export async function withRetry(fn, { attempts = 4, baseMs = 500, maxMs = 30000, onRetry } = {}) {
@@ -283,9 +284,10 @@ export async function runCollection({
     const queue = [];
     const folderTotals = {};
     const listings = [];
-    for (const folder of folders) {
+    for (const [index, folder] of folders.entries()) {
       if (signal?.aborted) break;
       progress.currentFolder = folder;
+      progress.statusDetail = `Listing ${folder} (folder ${index + 1} of ${folders.length})`;
       try {
         const { key, refs } = await withRetry(() => primary.enumerate(folder, { limit, searchCriteria }), { attempts: 3 });
         listings.push({ folder, key, refs });
@@ -312,13 +314,24 @@ export async function runCollection({
     const handlers = [primary];
     if (profile.perWorkerConnection && profile.workers > 1 && queue.length > 1) {
       const wanted = Math.min(profile.workers, queue.length) - 1;
-      const results = await Promise.allSettled(Array.from({ length: wanted }, async () => {
+      progress.statusDetail = `Opening ${wanted} additional connection(s)`;
+      // Extra sessions only speed things up: a server that is slow to accept them must not hold the
+      // collection at 0%, so go ahead with whatever connected in time and drop late arrivals.
+      let accepting = true;
+      const attempts = Array.from({ length: wanted }, async () => {
         const h = primary.cloneForWorker();
         await h.connect();
-        return h;
-      }));
-      for (const r of results) if (r.status === 'fulfilled') { handlers.push(r.value); extraHandlers.push(r.value); }
+        if (!accepting) { h.disconnect().catch(() => {}); return; }
+        handlers.push(h);
+        extraHandlers.push(h);
+      });
+      await Promise.race([
+        Promise.allSettled(attempts),
+        new Promise(r => setTimeout(r, EXTRA_CONNECTION_WAIT_MS)),
+      ]);
+      accepting = false;
     }
+    progress.statusDetail = '';
     const workerHandlers = profile.perWorkerConnection
       ? handlers
       : Array.from({ length: Math.max(1, Math.min(profile.workers, queue.length)) }, () => primary);

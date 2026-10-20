@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import http from 'http';
 import { URL } from 'url';
+import { createAuthWaiters } from './auth-waiters.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BUNDLED_DIR = path.join(__dirname, '..', '..', 'data');
@@ -18,7 +19,7 @@ const SCOPES = [
 
 let oAuth2Client = null;
 let callbackServer = null;
-let pendingAuthResolve = null;
+const authWaiters = createAuthWaiters();
 
 function ensureDataDir() {
   const dir = getConfigDir();
@@ -146,7 +147,7 @@ export function startCallbackServer() {
         if (error) {
           res.writeHead(200, { 'Content-Type': 'text/html' });
           res.end('<html><body><h2>Authorization denied.</h2><p>You can close this window.</p></body></html>');
-          if (pendingAuthResolve) pendingAuthResolve({ error });
+          authWaiters.settle({ error });
           return;
         }
 
@@ -155,11 +156,11 @@ export function startCallbackServer() {
             const tokens = await handleAuthCode(code);
             res.writeHead(200, { 'Content-Type': 'text/html' });
             res.end('<html><body><h2>Authorization successful!</h2><p>You can close this window and return to SherlockMail.</p></body></html>');
-            if (pendingAuthResolve) pendingAuthResolve({ success: true, tokens });
+            authWaiters.settle({ success: true, tokens });
           } catch (err) {
             res.writeHead(500, { 'Content-Type': 'text/html' });
             res.end(`<html><body><h2>Error</h2><p>${err.message}</p></body></html>`);
-            if (pendingAuthResolve) pendingAuthResolve({ error: err.message });
+            authWaiters.settle({ error: err.message });
           }
           return;
         }
@@ -184,9 +185,7 @@ export function startCallbackServer() {
 }
 
 export function waitForAuth() {
-  return new Promise((resolve) => {
-    pendingAuthResolve = resolve;
-  });
+  return authWaiters.wait();
 }
 
 export function stopCallbackServer() {
@@ -194,7 +193,6 @@ export function stopCallbackServer() {
     callbackServer.close();
     callbackServer = null;
   }
-  pendingAuthResolve = null;
 }
 
 export function revokeTokens() {

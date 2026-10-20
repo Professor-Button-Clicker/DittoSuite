@@ -2237,15 +2237,21 @@ function wizFormatDuration(ms) {
 }
 
 const WIZ_FEED_MAX = 150;
+const STALL_WARNING_MS = 30000;
 
 // Live collection view: the server pushes one event per collected item (plus a snapshot each second);
 // polling is a fallback. Rendering is batched to one paint per frame so fast collections stay smooth.
 function wizStartLiveProgress(projectId) {
   const $ = id => document.getElementById(id);
   const clientStart = Date.now();
-  const state = { p: {}, done: 0, total: 0, etaMs: null, etaAt: 0, queue: [] };
+  const state = { p: {}, done: 0, total: 0, etaMs: null, etaAt: 0, queue: [], changeKey: '', changedAt: Date.now() };
   let frame = 0;
   let stopped = false;
+  let lastRenderAt = 0;
+  const noteChange = () => {
+    const key = `${state.done}|${state.total}|${state.p.phase}|${state.p.statusDetail || ''}`;
+    if (key !== state.changeKey) { state.changeKey = key; state.changedAt = Date.now(); }
+  };
 
   $('wiz-log-output').innerHTML = '';
   $('wiz-progress-fill').classList.remove('complete');
@@ -2261,6 +2267,7 @@ function wizStartLiveProgress(projectId) {
     state.done = Math.max(state.done, done);
     state.total = p.total || state.total;
     if (typeof p.estimateMs === 'number') { state.etaMs = p.estimateMs; state.etaAt = Date.now(); }
+    noteChange();
     schedule();
   }
 
@@ -2274,13 +2281,15 @@ function wizStartLiveProgress(projectId) {
     }
     state.queue.push({ ...e, n: done });
     if (state.queue.length > WIZ_FEED_MAX) state.queue.splice(0, state.queue.length - WIZ_FEED_MAX);
+    noteChange();
     schedule();
   }
 
   function phaseText(p) {
     switch (p.phase) {
-      case 'enumerating': return `Counting items${p.currentFolder ? ' in ' + p.currentFolder : ''}... ${state.total.toLocaleString()} found`;
-      case 'collecting': return p.retrying ? `Retrying ${p.retryItem || 'a failed item'}` : `Collecting from ${p.currentFolder || 'mailbox'}`;
+      case 'connecting': return p.statusDetail || 'Connecting to mail server...';
+      case 'enumerating': return `${p.statusDetail || `Counting items${p.currentFolder ? ' in ' + p.currentFolder : ''}`}... ${state.total.toLocaleString()} found`;
+      case 'collecting': return p.retrying ? `Retrying ${p.retryItem || 'a failed item'}` : (p.statusDetail || `Collecting from ${p.currentFolder || 'mailbox'}`);
       case 'finalizing': return 'Finalizing: writing logs, hashes and timestamps...';
       case 'complete': return 'Collection complete';
       case 'error': return 'Collection failed';
@@ -2290,6 +2299,7 @@ function wizStartLiveProgress(projectId) {
 
   function render() {
     frame = 0;
+    lastRenderAt = Date.now();
     const p = state.p;
     const total = state.total;
     const done = total ? Math.min(state.done, total) : state.done;
@@ -2330,7 +2340,24 @@ function wizStartLiveProgress(projectId) {
   }
 
   function tick() {
+    // Chromium suspends requestAnimationFrame when it thinks the window is hidden or covered
+    // (seen on some remote-desktop and multi-monitor setups); paint from the timer instead.
+    if (frame && Date.now() - lastRenderAt > 500) {
+      cancelAnimationFrame(frame);
+      render();
+      return;
+    }
     const p = state.p;
+    const hintEl = $('wiz-progress-hint');
+    const stalledMs = Date.now() - state.changedAt;
+    if (hintEl) {
+      const active = !p.phase || ['connecting', 'enumerating', 'collecting'].includes(p.phase);
+      hintEl.textContent = active && stalledMs > STALL_WARNING_MS
+        ? `No progress for ${wizFormatDuration(stalledMs)}. ${p.statusDetail || 'Still waiting for the mail server'}.`
+          + (p.lastError ? ` Last error: ${p.lastError}.` : '')
+          + (p.liveLogFile ? ` Details are being written to ${p.liveLogFile}` : '')
+        : '';
+    }
     const etaEl = $('wiz-progress-eta');
     const finishEl = $('wiz-progress-finish');
     if (p.phase === 'collecting' && state.etaMs != null) {
@@ -2380,6 +2407,8 @@ function wizStartLiveProgress(projectId) {
     clearInterval(ticker);
     if (frame) cancelAnimationFrame(frame);
     frame = 0;
+    const hintEl = $('wiz-progress-hint');
+    if (hintEl) hintEl.textContent = '';
   }
 
   function finish(result) {

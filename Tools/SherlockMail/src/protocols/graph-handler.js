@@ -4,6 +4,7 @@ import { getAccessToken, refreshAccessToken, getAuthStatus } from '../services/m
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
 const TOKEN_REUSE_MS = 30000;
+const REQUEST_TIMEOUT_MS = 120000;
 const WELL_KNOWN_FOLDERS = {
   inbox: 'inbox', 'sent items': 'sentitems', sent: 'sentitems', drafts: 'drafts',
   'deleted items': 'deleteditems', trash: 'deleteditems', 'junk email': 'junkemail', junk: 'junkemail',
@@ -45,7 +46,7 @@ export class GraphHandler {
   async graphRequest(pathOrUrl, { raw = false, retriedAuth = false } = {}) {
     const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${GRAPH_BASE}${pathOrUrl}`;
     const token = await this.getToken();
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
 
     if (res.status === 401 && !retriedAuth) {
       await this.forceTokenRefresh();

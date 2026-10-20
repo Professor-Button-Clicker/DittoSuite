@@ -1384,6 +1384,15 @@ input[type="range"]::-webkit-slider-thumb {
 
 .wiz-progress-sub span:empty { display: none; }
 
+.wiz-progress-hint {
+  font-size: 12px;
+  color: var(--warning);
+  margin: -8px 0 14px;
+  word-break: break-word;
+}
+
+.wiz-progress-hint:empty { display: none; }
+
 .wiz-stat strong small {
   font-size: 11px;
   color: var(--text-muted);

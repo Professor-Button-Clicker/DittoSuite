@@ -2,6 +2,8 @@ import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 
 const DEFAULT_EWS_URL = 'https://outlook.office365.com/EWS/Exchange.asmx';
+const REQUEST_TIMEOUT_MS = 120000;
+const AUTODISCOVER_TIMEOUT_MS = 30000;
 
 export class EwsHandler {
   constructor(config) {
@@ -48,6 +50,7 @@ export class EwsHandler {
             ...this.authHeaders,
           },
           body: soapBody,
+          signal: AbortSignal.timeout(AUTODISCOVER_TIMEOUT_MS),
         });
 
         if (res.ok) {
@@ -117,6 +120,7 @@ export class EwsHandler {
         ...this.authHeaders,
       },
       body: envelope,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
     const text = await res.text();

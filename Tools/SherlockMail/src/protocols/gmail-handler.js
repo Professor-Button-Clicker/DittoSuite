@@ -30,7 +30,8 @@ export class GmailHandler {
     }
 
     const auth = getOAuth2Client();
-    this.gmail = google.gmail({ version: 'v1', auth });
+    // Without a timeout a blocked or proxied network leaves requests hanging forever.
+    this.gmail = google.gmail({ version: 'v1', auth, timeout: 60000 });
 
     this.log('CLIENT', 'Connecting to Gmail API via OAuth2');
     this.log('C→S', 'GET https://gmail.googleapis.com/gmail/v1/users/me/profile');
