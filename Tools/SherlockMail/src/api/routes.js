@@ -259,10 +259,42 @@ function determineCompletionType(acquired, failed, skipped, total, canceled = fa
 // ── Collection Progress Tracking ──
 const collectionProgress = new Map();
 
+const collectionStreams = new Map();
+
+function progressSnapshot(p) {
+  const { errors, ...rest } = p;
+  return { ...rest, errorCount: errors?.length || 0, lastError: errors?.length ? errors[errors.length - 1] : null };
+}
+
+function publishCollectEvent(projectId, evt) {
+  const clients = collectionStreams.get(projectId);
+  if (!clients?.size) return;
+  const frame = `data: ${JSON.stringify(evt)}\n\n`;
+  for (const client of clients) client.write(frame);
+}
+
 router.get('/projects/:id/collect/progress', (req, res) => {
   const progress = collectionProgress.get(req.params.id);
   if (!progress) return res.json({ active: false });
   res.json(progress);
+});
+
+// Server-sent events: one frame per collected item plus a progress snapshot every second.
+router.get('/projects/:id/collect/events', (req, res) => {
+  const id = req.params.id;
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+  res.write(': connected\n\n');
+  if (!collectionStreams.has(id)) collectionStreams.set(id, new Set());
+  collectionStreams.get(id).add(res);
+  const current = collectionProgress.get(id);
+  if (current) res.write(`data: ${JSON.stringify({ type: 'progress', progress: progressSnapshot(current) })}\n\n`);
+  const keepAlive = setInterval(() => res.write(': ping\n\n'), 15000);
+  req.on('close', () => {
+    clearInterval(keepAlive);
+    const clients = collectionStreams.get(id);
+    clients?.delete(res);
+    if (clients && !clients.size) collectionStreams.delete(id);
+  });
 });
 
 // ── Dashboard Stats ──
@@ -746,7 +778,7 @@ function processMessageItem(msg, projectId, acquisitionId, existingIds, differen
 const DB_FLUSH_SIZE = 200;
 const DB_FLUSH_INTERVAL_MS = 2000;
 
-function createCollectionSink({ projectId, acquisitionId, mimeDir, differential, existingIds, progress, errors, folderStats, downloadedItems, differentialExclusions }) {
+function createCollectionSink({ projectId, acquisitionId, mimeDir, differential, existingIds, progress, errors, folderStats, downloadedItems, differentialExclusions, onItem }) {
   const folderCounters = {};
   const madeDirs = new Set();
   let pending = [];
@@ -789,6 +821,7 @@ function createCollectionSink({ projectId, acquisitionId, mimeDir, differential,
       differentialExclusions.push({ messageId: msg.messageId, hashSha256: msg.hashSha256, folder });
       stats.skipped++;
       progress.skipped++;
+      onItem?.('skipped', msg, folder);
       return;
     }
 
@@ -810,6 +843,7 @@ function createCollectionSink({ projectId, acquisitionId, mimeDir, differential,
     });
     stats.acquired++;
     progress.acquired++;
+    onItem?.('acquired', msg, folder);
     if (pending.length >= DB_FLUSH_SIZE || Date.now() - lastFlush > DB_FLUSH_INTERVAL_MS) flush();
   }
 
@@ -907,9 +941,15 @@ router.post('/projects/:id/collect', async (req, res) => {
       progress.phase = 'connecting';
       await retryWithBackoff(() => handler.connect());
 
+      const itemEvent = (status, folder, fields) => publishCollectEvent(project.id, {
+        type: 'item', status, folder, ...fields,
+        acquired: progress.acquired, failed: progress.failed, skipped: progress.skipped,
+        total: progress.total, bytesDone: progress.bytesDone,
+      });
       const sink = createCollectionSink({
         projectId: project.id, acquisitionId, mimeDir, differential, existingIds,
         progress, errors, folderStats, downloadedItems, differentialExclusions,
+        onItem: (status, msg, folder) => itemEvent(status, folder, { uid: msg.uid, subject: msg.subject, from: msg.fromAddress, size: msg.size }),
       });
       const pushProgressError = (text) => {
         progress.errors.push(text);
@@ -935,11 +975,13 @@ router.post('/projects/:id/collect', async (req, res) => {
               timestamp: new Date().toISOString(), type: stage === 'fetch' ? 'message_fetch_error' : 'message_error',
             });
             pushProgressError(`${folder} #${ref?.uid ?? '?'}: ${error.message}`);
+            itemEvent('failed', folder, { uid: ref?.uid, error: error.message });
           },
           onFolderError: (folder, err) => {
             errors.push({ folder, error: err.message, timestamp: new Date().toISOString(), type: 'folder_error' });
             pushProgressError(`${folder}: ${err.message}`);
           },
+          onTick: () => publishCollectEvent(project.id, { type: 'progress', progress: progressSnapshot(progress) }),
         });
       } finally {
         sink.flush();
@@ -1011,6 +1053,7 @@ router.post('/projects/:id/collect', async (req, res) => {
       : 'completed';
 
     progress.phase = 'finalizing';
+    publishCollectEvent(project.id, { type: 'progress', progress: progressSnapshot(progress) });
 
     const logResult = writeAcquisitionLogs(logsDir, sessionName, {
       startedAt,
@@ -1064,6 +1107,8 @@ router.post('/projects/:id/collect', async (req, res) => {
 
     progress.active = false;
     progress.phase = 'complete';
+    progress.estimateMs = 0;
+    publishCollectEvent(project.id, { type: 'progress', progress: progressSnapshot(progress) });
 
     res.json({
       acquisitionId,
@@ -1088,6 +1133,7 @@ router.post('/projects/:id/collect', async (req, res) => {
     progress.phase = 'error';
     progress.errors.push(err.message);
     collectionProgress.set(project.id, progress);
+    publishCollectEvent(project.id, { type: 'progress', progress: progressSnapshot(progress) });
 
     try {
       writeAcquisitionLogs(logsDir, sessionName, {

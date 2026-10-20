@@ -157,15 +157,22 @@ export class EwsHandler {
     const refs = [];
     for (let offset = 0; ; ) {
       const xml = await this.soapRequest('FindItem', `<m:FindItem Traversal="Shallow">
-        <m:ItemShape><t:BaseShape>IdOnly</t:BaseShape></m:ItemShape>
+        <m:ItemShape>
+          <t:BaseShape>IdOnly</t:BaseShape>
+          <t:AdditionalProperties><t:FieldURI FieldURI="item:Size"/></t:AdditionalProperties>
+        </m:ItemShape>
         <m:IndexedPageItemView MaxEntriesReturned="${pageSize}" Offset="${offset}" BasePoint="Beginning"/>
         <m:ParentFolderIds>${folderRef}</m:ParentFolderIds>
       </m:FindItem>`);
       let count = 0;
-      for (const m of xml.matchAll(/<t:ItemId\b([^>]*)\/>/g)) {
+      for (const m of xml.matchAll(/<t:ItemId\b([^>]*)\/>([\s\S]*?)(?=<t:ItemId\b|<\/t:Items>)/g)) {
         const id = m[1].match(/\bId="([^"]+)"/)?.[1];
         if (!id) continue;
-        refs.push({ key: id, uid: refs.length + 1, serviceId: id, changeKey: m[1].match(/\bChangeKey="([^"]+)"/)?.[1] || '' });
+        refs.push({
+          key: id, uid: refs.length + 1, serviceId: id,
+          changeKey: m[1].match(/\bChangeKey="([^"]+)"/)?.[1] || '',
+          size: parseInt(m[2].match(/<t:Size>(\d+)<\/t:Size>/)?.[1] || '0', 10),
+        });
         count++;
       }
       offset += count;
@@ -176,7 +183,7 @@ export class EwsHandler {
     return { key: folder, refs: selected };
   }
 
-  async fetchBatch(_folder, refs) {
+  async fetchBatch(_folder, refs, deliver) {
     const ids = refs.map(r => `<t:ItemId Id="${this.escapeXml(r.key)}"/>`).join('');
     const xml = await this.soapRequest('GetItem', `<m:GetItem>
       <m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:IncludeMimeContent>true</t:IncludeMimeContent></m:ItemShape>
@@ -204,6 +211,7 @@ export class EwsHandler {
       if (firstError === 'ErrorItemNotFound') err.permanent = true;
       throw err;
     }
+    if (deliver) for (const item of out) deliver(item);
     return out;
   }
 

@@ -91,19 +91,27 @@ export class ImapHandler {
     let uids = box.exists > 0 ? await this.client.search(searchCriteria || { all: true }, { uid: true }) : [];
     uids = (uids || []).sort((a, b) => a - b);
     if (limit > 0) uids = uids.slice(0, limit);
+    const sizes = new Map();
+    if (uids.length) {
+      const wanted = new Set(uids);
+      for await (const m of this.client.fetch(`${uids[0]}:${uids[uids.length - 1]}`, { uid: true, size: true }, { uid: true })) {
+        if (wanted.has(m.uid)) sizes.set(m.uid, m.size);
+      }
+    }
     this.log('CLIENT', `Enumerated ${uids.length} UIDs in ${folderPath} (EXISTS ${box.exists}, UIDVALIDITY ${box.uidValidity})`);
-    return { key: folderPath, refs: uids.map(uid => ({ key: String(uid), uid })) };
+    return { key: folderPath, refs: uids.map(uid => ({ key: String(uid), uid, size: sizes.get(uid) || 0 })) };
   }
 
-  async fetchBatch(folderPath, refs) {
+  async fetchBatch(folderPath, refs, deliver) {
     await this.openReadOnly(folderPath);
     const byUid = new Map(refs.map(r => [r.uid, r]));
     const out = [];
+    const emit = deliver || (item => out.push(item));
     const query = { uid: true, flags: true, internalDate: true, source: true };
     for await (const m of this.client.fetch(compactUidSet(byUid.keys()), query, { uid: true })) {
       const ref = byUid.get(m.uid);
       if (!ref || !m.source) continue;
-      out.push({
+      emit({
         ref,
         raw: m.source,
         meta: {

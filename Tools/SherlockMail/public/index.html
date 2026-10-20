@@ -781,11 +781,21 @@
               <p class="wizard-desc">The tool is now collecting emails from the server. Do not close this window.</p>
               <div class="wizard-form">
                 <div class="wiz-progress-section">
+                  <div class="wiz-progress-head">
+                    <div class="wiz-progress-count"><strong id="wiz-progress-done">0</strong> of <span id="wiz-progress-total">0</span> items</div>
+                    <div class="wiz-progress-eta" id="wiz-progress-eta">Estimating time remaining...</div>
+                  </div>
                   <div class="wiz-progress-bar-track">
                     <div class="wiz-progress-bar-fill" id="wiz-progress-fill" style="width:0%"></div>
                   </div>
+                  <div class="wiz-progress-sub">
+                    <span id="wiz-progress-pct"></span>
+                    <span id="wiz-progress-rate"></span>
+                    <span id="wiz-progress-finish"></span>
+                  </div>
                   <div class="wiz-progress-label" id="wiz-progress-label">Initializing...</div>
                   <div class="wiz-progress-stats" id="wiz-progress-stats"></div>
+                  <div class="wiz-feed-title">Collected items (newest first)</div>
                   <div class="wiz-log-output" id="wiz-log-output"></div>
                 </div>
               </div>

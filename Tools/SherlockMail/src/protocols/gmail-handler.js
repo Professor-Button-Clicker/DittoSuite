@@ -198,13 +198,14 @@ export class GmailHandler {
     return { key: labelId, refs: selected.map((id, i) => ({ key: id, uid: i + 1, serviceId: id })) };
   }
 
-  async fetchBatch(_labelId, refs) {
+  async fetchBatch(_labelId, refs, deliver) {
     const out = [];
+    const emit = deliver || (item => out.push(item));
     for (const ref of refs) {
       const res = await this.call(() => this.gmail.users.messages.get({
         userId: 'me', id: ref.key, format: 'raw', fields: 'id,threadId,labelIds,internalDate,raw',
       }));
-      out.push({
+      emit({
         ref,
         raw: Buffer.from(res.data.raw, 'base64url'),
         meta: {

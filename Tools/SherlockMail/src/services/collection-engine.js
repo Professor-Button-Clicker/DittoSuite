@@ -5,13 +5,31 @@ import { v4 as uuidv4 } from 'uuid';
 // Per-protocol throughput settings. Limits follow each provider's documented ceilings:
 // Graph allows 4 concurrent requests per mailbox, Gmail 250 quota units/s (messages.get = 5),
 // EWS GetItem is batched like FEC's BindToItems, IMAP uses parallel sessions with range FETCH.
+// batchBytes caps a batch by server-reported size so one connection never vanishes into a huge batch.
 export const COLLECTION_PROFILES = {
-  imap:      { workers: 4, perWorkerConnection: true, batchSize: 50 },
-  pop3:      { workers: 1, perWorkerConnection: false, batchSize: 10 },
+  imap:      { workers: 4, perWorkerConnection: true, batchSize: 50, batchBytes: 4 * 1024 * 1024 },
+  pop3:      { workers: 1, perWorkerConnection: false, batchSize: 10, batchBytes: 4 * 1024 * 1024 },
   gmail_api: { workers: 10, perWorkerConnection: false, batchSize: 1, ratePerSec: 40 },
   graph:     { workers: 4, perWorkerConnection: false, batchSize: 1 },
-  ews:       { workers: 4, perWorkerConnection: false, batchSize: 20 },
+  ews:       { workers: 4, perWorkerConnection: false, batchSize: 20, batchBytes: 8 * 1024 * 1024 },
 };
+
+function makeBatches(refs, maxItems, maxBytes) {
+  const batches = [];
+  let cur = [];
+  let bytes = 0;
+  for (const ref of refs) {
+    if (cur.length && (cur.length >= maxItems || (maxBytes && bytes + (ref.size || 0) > maxBytes))) {
+      batches.push(cur);
+      cur = [];
+      bytes = 0;
+    }
+    cur.push(ref);
+    bytes += ref.size || 0;
+  }
+  if (cur.length) batches.push(cur);
+  return batches;
+}
 
 export function supportsEngine(protocol) {
   return Object.prototype.hasOwnProperty.call(COLLECTION_PROFILES, protocol);
@@ -131,52 +149,75 @@ export async function buildMessageRecord(raw, extra = {}) {
 const WARMUP_SAMPLES = 5;
 const MIN_COLLECT_MS_FOR_ETA = 2000;
 
-function startRateTracker(progress) {
-  let lastDone = 0;
-  let lastBytes = 0;
-  let lastT = Date.now();
-  let itemsRate = null;
-  let bytesRate = null;
+// ETA works in "units": each item weighs its server-reported size when sizes are known, so a
+// mailbox whose large attachments sit in one folder doesn't make an item-count ETA swing wildly.
+function startRateTracker(progress, onTick) {
+  const KEYS = ['done', 'units', 'bytes'];
+  let start = null;
+  let last = null;
+  let rates = null;
   let samples = 0;
-  let collectStart = null;
-  let doneAtStart = 0;
-  let bytesAtStart = 0;
   const timer = setInterval(() => {
     const now = Date.now();
-    const done = progress.acquired + progress.failed + progress.skipped;
+    const cur = {
+      t: now,
+      done: progress.acquired + progress.failed + progress.skipped,
+      units: progress.unitsDone || 0,
+      bytes: progress.bytesDone || 0,
+    };
     progress.elapsedMs = now - progress.startedAt;
-    const secs = (now - lastT) / 1000;
-    if (progress.phase === 'collecting' && collectStart === null) {
-      collectStart = lastT;
-      doneAtStart = lastDone;
-      bytesAtStart = lastBytes;
-    }
-    if (progress.phase === 'collecting' && secs > 0) {
-      samples++;
-      const sinceStart = (now - collectStart) / 1000;
-      const inst = (done - lastDone) / secs;
-      const instBytes = (progress.bytesDone - lastBytes) / secs;
-      // Cumulative average while warming up (one slow first second would otherwise dominate), EWMA after.
-      if (samples <= WARMUP_SAMPLES) {
-        itemsRate = (done - doneAtStart) / sinceStart;
-        bytesRate = (progress.bytesDone - bytesAtStart) / sinceStart;
+    if (progress.phase === 'collecting') {
+      if (!start) {
+        start = cur;
       } else {
-        itemsRate = 0.3 * inst + 0.7 * itemsRate;
-        bytesRate = 0.3 * instBytes + 0.7 * bytesRate;
+        samples++;
+        const span = (now - start.t) / 1000;
+        const dt = (now - last.t) / 1000;
+        // Cumulative average while warming up (one slow first second would otherwise dominate), EWMA after.
+        if (samples <= WARMUP_SAMPLES || !rates) {
+          rates = Object.fromEntries(KEYS.map(k => [k, (cur[k] - start[k]) / span]));
+        } else {
+          for (const k of KEYS) rates[k] = 0.3 * ((cur[k] - last[k]) / dt) + 0.7 * rates[k];
+        }
+        progress.itemsPerSec = Math.round(rates.done * 10) / 10;
+        progress.bytesPerSec = Math.round(rates.bytes);
+        if (now - start.t >= MIN_COLLECT_MS_FOR_ETA) {
+          const remainingUnits = Math.max(0, (progress.totalUnits || 0) - cur.units);
+          const remainingItems = Math.max(0, progress.total - cur.done);
+          progress.estimateMs = rates.units > 0 ? Math.round((remainingUnits / rates.units) * 1000) : null;
+          progress.estimateItemsMs = rates.done > 0 ? Math.round((remainingItems / rates.done) * 1000) : null;
+          progress.estimatedFinishAt = progress.estimateMs != null ? now + progress.estimateMs : null;
+        }
       }
-      progress.itemsPerSec = Math.round(itemsRate * 10) / 10;
-      progress.bytesPerSec = Math.round(bytesRate);
-      const remaining = Math.max(0, progress.total - done);
-      progress.estimateMs = itemsRate > 0.01 && now - collectStart >= MIN_COLLECT_MS_FOR_ETA
-        ? Math.round((remaining / itemsRate) * 1000)
-        : null;
     }
-    lastDone = done;
-    lastBytes = progress.bytesDone;
-    lastT = now;
+    last = cur;
+    onTick?.();
   }, 1000);
   timer.unref?.();
   return () => clearInterval(timer);
+}
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function assignWeights(refs, progress) {
+  const sized = refs.filter(r => r.size > 0);
+  const useBytes = refs.length > 0 && sized.length >= refs.length * 0.9;
+  const avg = sized.length ? sized.reduce((s, r) => s + r.size, 0) / sized.length : 1;
+  let total = 0;
+  for (const r of refs) {
+    r.weight = useBytes ? (r.size > 0 ? r.size : avg) : 1;
+    total += r.weight;
+  }
+  progress.etaBasis = useBytes ? 'bytes' : 'items';
+  progress.totalUnits = total;
+  progress.unitsDone = 0;
+  progress.totalBytesEstimate = useBytes ? Math.round(total) : null;
 }
 
 /**
@@ -186,11 +227,11 @@ function startRateTracker(progress) {
  */
 export async function runCollection({
   protocol, primary, folders, limit = 0, searchCriteria, progress,
-  onRecord, onFailure, onFolderError, overrides = {}, signal,
+  onRecord, onFailure, onFolderError, onTick, overrides = {}, signal,
 }) {
   const profile = { ...COLLECTION_PROFILES[protocol] };
   if (overrides.workers > 0) profile.workers = Math.min(overrides.workers, 16);
-  const stopTracker = startRateTracker(progress);
+  const stopTracker = startRateTracker(progress, onTick);
   const extraHandlers = [];
   progress.bytesDone = progress.bytesDone || 0;
 
@@ -205,14 +246,18 @@ export async function runCollection({
         const { key, refs } = await withRetry(() => primary.enumerate(folder, { limit, searchCriteria }), { attempts: 3 });
         folderTotals[folder] = refs.length;
         progress.total += refs.length;
-        for (let i = 0; i < refs.length; i += profile.batchSize) {
-          queue.push({ folder, key, refs: refs.slice(i, i + profile.batchSize) });
-        }
+        shuffle(refs);
+        for (const batch of makeBatches(refs, profile.batchSize, profile.batchBytes)) queue.push({ folder, key, refs: batch });
       } catch (err) {
         folderTotals[folder] = 0;
         onFolderError?.(folder, err);
       }
     }
+    // Random order keeps throughput stationary: mailboxes cluster large attachments by folder and date,
+    // so collecting in server order makes any rate-based ETA wrong until the clusters are reached.
+    shuffle(queue);
+    assignWeights(queue.flatMap(j => j.refs), progress);
+    const settle = ref => { progress.unitsDone += ref.weight || 1; };
 
     const handlers = [primary];
     if (profile.perWorkerConnection && profile.workers > 1 && queue.length > 1) {
@@ -233,55 +278,62 @@ export async function runCollection({
 
     const limiter = profile.ratePerSec ? new RateLimiter(profile.ratePerSec) : null;
 
-    const fetchJob = (handler, job) => withRetry(async () => {
-      if (limiter) await limiter.take();
-      if (handler.ensureConnected) await handler.ensureConnected();
-      const items = await handler.fetchBatch(job.key, job.refs);
-      if (job.refs.length === 1 && items.length === 0) throw new Error('Server returned no content for item');
-      return items;
-    }, {
-      attempts: job.refs.length > 1 ? 2 : 4,
-      onRetry: (err) => {
-        progress.retrying = true;
-        progress.retryItem = `${job.folder} (${job.refs.length} item${job.refs.length > 1 ? 's' : ''}): ${err.message}`;
-      },
-    });
-
-    const processJob = async (handler, job) => {
-      let items;
+    const processItem = async (job, item) => {
+      progress.bytesDone += item.raw.length;
       try {
-        items = await fetchJob(handler, job);
+        const msg = await buildMessageRecord(item.raw, {
+          uid: item.ref.uid,
+          serviceId: item.ref.serviceId || null,
+          folder: job.folder,
+          ...item.meta,
+        });
+        await onRecord(msg, job.folder);
       } catch (err) {
-        if (job.refs.length > 1) {
-          for (const ref of job.refs) queue.push({ ...job, refs: [ref] });
-        } else {
-          onFailure({ folder: job.folder, ref: job.refs[0], error: err, stage: 'fetch' });
-        }
-        return;
+        onFailure({ folder: job.folder, ref: item.ref, error: err, stage: 'process' });
+      }
+      settle(item.ref);
+    };
+
+    // Handlers deliver each item as it arrives, so it is written and counted immediately rather than
+    // when the whole batch completes; a retry only re-requests items not yet delivered.
+    const processJob = async (handler, job) => {
+      const delivered = new Set();
+      const processing = [];
+      const deliver = (item) => {
+        if (!item?.raw || delivered.has(item.ref.key)) return;
+        delivered.add(item.ref.key);
+        processing.push(processItem(job, item));
+      };
+      let fetchError = null;
+      try {
+        await withRetry(async () => {
+          const remaining = job.refs.filter(r => !delivered.has(r.key));
+          if (!remaining.length) return;
+          if (limiter) await limiter.take();
+          if (handler.ensureConnected) await handler.ensureConnected();
+          await handler.fetchBatch(job.key, remaining, deliver);
+          if (job.refs.length === 1 && !delivered.size) throw new Error('Server returned no content for item');
+        }, {
+          attempts: job.refs.length > 1 ? 2 : 4,
+          onRetry: (err) => {
+            progress.retrying = true;
+            progress.retryItem = `${job.folder} (${job.refs.length - delivered.size} item${job.refs.length - delivered.size === 1 ? '' : 's'}): ${err.message}`;
+          },
+        });
+      } catch (err) {
+        fetchError = err;
       } finally {
         progress.retrying = false;
       }
+      await Promise.all(processing);
 
-      const got = new Set();
-      for (const item of items) {
-        got.add(item.ref.key);
-        progress.bytesDone += item.raw.length;
-        try {
-          const msg = await buildMessageRecord(item.raw, {
-            uid: item.ref.uid,
-            serviceId: item.ref.serviceId || null,
-            folder: job.folder,
-            ...item.meta,
-          });
-          await onRecord(msg, job.folder);
-        } catch (err) {
-          onFailure({ folder: job.folder, ref: item.ref, error: err, stage: 'process' });
+      for (const ref of job.refs.filter(r => !delivered.has(r.key))) {
+        if (job.refs.length > 1) {
+          queue.push({ ...job, refs: [ref] });
+        } else {
+          onFailure({ folder: job.folder, ref, error: fetchError || new Error('Server returned no content for item'), stage: 'fetch' });
+          settle(ref);
         }
-      }
-      const missing = job.refs.filter(r => !got.has(r.key));
-      for (const ref of missing) {
-        if (job.refs.length > 1) queue.push({ ...job, refs: [ref] });
-        else onFailure({ folder: job.folder, ref, error: new Error('Server returned no content for item'), stage: 'fetch' });
       }
     };
 

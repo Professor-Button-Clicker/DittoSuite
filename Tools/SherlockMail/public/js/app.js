@@ -2205,6 +2205,175 @@ function wizBuildPreview() {
   `;
 }
 
+function wizFormatDuration(ms) {
+  const secs = Math.max(0, Math.round(ms / 1000));
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ${String(secs % 60).padStart(2, '0')}s`;
+  return `${Math.floor(mins / 60)}h ${String(mins % 60).padStart(2, '0')}m`;
+}
+
+const WIZ_FEED_MAX = 150;
+
+// Live collection view: the server pushes one event per collected item (plus a snapshot each second);
+// polling is a fallback. Rendering is batched to one paint per frame so fast collections stay smooth.
+function wizStartLiveProgress(projectId) {
+  const $ = id => document.getElementById(id);
+  const clientStart = Date.now();
+  const state = { p: {}, done: 0, total: 0, etaMs: null, etaAt: 0, queue: [] };
+  let frame = 0;
+  let stopped = false;
+
+  $('wiz-log-output').innerHTML = '';
+  $('wiz-progress-fill').classList.remove('complete');
+  $('wiz-progress-fill').style.width = '0%';
+
+  const schedule = () => { if (!frame && !stopped) frame = requestAnimationFrame(render); };
+
+  function applyProgress(p) {
+    if (!p || (p.startedAt && p.startedAt < clientStart - 5000)) return;
+    const done = (p.acquired || 0) + (p.failed || 0) + (p.skipped || 0);
+    if (done < state.done) p = { ...p, acquired: state.p.acquired, failed: state.p.failed, skipped: state.p.skipped };
+    state.p = { ...state.p, ...p };
+    state.done = Math.max(state.done, done);
+    state.total = p.total || state.total;
+    if (typeof p.estimateMs === 'number') { state.etaMs = p.estimateMs; state.etaAt = Date.now(); }
+    schedule();
+  }
+
+  function applyItem(e) {
+    const done = e.acquired + e.failed + e.skipped;
+    if (done >= state.done) {
+      Object.assign(state.p, { acquired: e.acquired, failed: e.failed, skipped: e.skipped, total: e.total, bytesDone: e.bytesDone, currentFolder: e.folder });
+      if (!state.p.phase || state.p.phase === 'connecting' || state.p.phase === 'enumerating') state.p.phase = 'collecting';
+      state.done = done;
+      state.total = e.total;
+    }
+    state.queue.push({ ...e, n: done });
+    if (state.queue.length > WIZ_FEED_MAX) state.queue.splice(0, state.queue.length - WIZ_FEED_MAX);
+    schedule();
+  }
+
+  function phaseText(p) {
+    switch (p.phase) {
+      case 'enumerating': return `Counting items${p.currentFolder ? ' in ' + p.currentFolder : ''}... ${state.total.toLocaleString()} found`;
+      case 'collecting': return p.retrying ? `Retrying ${p.retryItem || 'a failed item'}` : `Collecting from ${p.currentFolder || 'mailbox'}`;
+      case 'finalizing': return 'Finalizing: writing logs, hashes and timestamps...';
+      case 'complete': return 'Collection complete';
+      case 'error': return 'Collection failed';
+      default: return 'Connecting to mail server...';
+    }
+  }
+
+  function render() {
+    frame = 0;
+    const p = state.p;
+    const total = state.total;
+    const done = total ? Math.min(state.done, total) : state.done;
+    const pct = total ? (done / total) * 100 : 0;
+    $('wiz-progress-fill').style.width = `${pct.toFixed(2)}%`;
+    $('wiz-progress-done').textContent = done.toLocaleString();
+    $('wiz-progress-total').textContent = total.toLocaleString();
+    $('wiz-progress-pct').textContent = total ? `${pct < 10 ? pct.toFixed(1) : Math.floor(pct)}%` : '';
+    $('wiz-progress-rate').textContent = p.itemsPerSec ? `${p.itemsPerSec.toLocaleString()} items/s · ${formatBytes(p.bytesPerSec || 0)}/s` : '';
+    $('wiz-progress-label').textContent = phaseText(p);
+
+    const ofTotal = p.totalBytesEstimate ? ` <small>of ~${formatBytes(p.totalBytesEstimate)}</small>` : '';
+    $('wiz-progress-stats').innerHTML = `
+      <div class="wiz-stat"><span>Acquired</span><strong>${(p.acquired || 0).toLocaleString()}</strong></div>
+      <div class="wiz-stat"><span>Failed</span><strong style="${p.failed > 0 ? 'color:var(--danger)' : ''}">${(p.failed || 0).toLocaleString()}</strong></div>
+      <div class="wiz-stat"><span>Skipped</span><strong>${(p.skipped || 0).toLocaleString()}</strong></div>
+      <div class="wiz-stat"><span>Downloaded</span><strong>${formatBytes(p.bytesDone || 0)}${ofTotal}</strong></div>
+      <div class="wiz-stat"><span>Connections</span><strong>${p.connections || '-'}${p.workers > p.connections ? ` × ${p.workers}` : ''}</strong></div>
+      <div class="wiz-stat"><span>Elapsed</span><strong id="wiz-elapsed">${wizFormatDuration(Date.now() - (p.startedAt || clientStart))}</strong></div>`;
+
+    if (state.queue.length) {
+      const feed = $('wiz-log-output');
+      const frag = document.createDocumentFragment();
+      for (let i = state.queue.length - 1; i >= 0; i--) {
+        const e = state.queue[i];
+        const row = document.createElement('div');
+        row.className = `wiz-feed-row ${e.status}`;
+        const status = e.status === 'acquired' ? 'OK' : e.status === 'skipped' ? 'SKIP' : 'FAIL';
+        const text = e.status === 'failed' ? `#${e.uid ?? '?'}: ${e.error || 'failed'}` : (e.subject || '(no subject)');
+        row.innerHTML = `<span class="n">${e.n.toLocaleString()}</span><span class="st">${status}</span><span class="fd">${esc(e.folder)}</span><span class="sj">${esc(text)}</span><span class="sz">${e.size ? formatBytes(e.size) : ''}</span>`;
+        frag.appendChild(row);
+      }
+      state.queue = [];
+      feed.prepend(frag);
+      while (feed.childElementCount > WIZ_FEED_MAX) feed.lastElementChild.remove();
+    }
+    tick();
+  }
+
+  function tick() {
+    const p = state.p;
+    const etaEl = $('wiz-progress-eta');
+    const finishEl = $('wiz-progress-finish');
+    if (p.phase === 'collecting' && state.etaMs != null) {
+      const left = Math.max(0, state.etaMs - (Date.now() - state.etaAt));
+      etaEl.textContent = `${wizFormatDuration(left)} remaining`;
+      finishEl.textContent = `Finishes around ${new Date(Date.now() + left).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    } else if (p.phase === 'finalizing') {
+      etaEl.textContent = 'Almost done';
+      finishEl.textContent = '';
+    } else if (!p.phase || ['connecting', 'enumerating', 'collecting'].includes(p.phase)) {
+      etaEl.textContent = 'Estimating time remaining...';
+      finishEl.textContent = '';
+    }
+    const elapsedEl = $('wiz-elapsed');
+    if (elapsedEl) elapsedEl.textContent = wizFormatDuration(Date.now() - (p.startedAt || clientStart));
+  }
+
+  let es = null;
+  const ready = new Promise(resolve => {
+    setTimeout(resolve, 1500);
+    try {
+      es = new EventSource(`/api/projects/${projectId}/collect/events`);
+      es.onopen = () => resolve();
+      es.onerror = () => resolve();
+      es.onmessage = ev => {
+        try {
+          const d = JSON.parse(ev.data);
+          if (d.type === 'item') applyItem(d);
+          else applyProgress(d.progress);
+        } catch (_) {}
+      };
+    } catch (_) { resolve(); }
+  });
+  const poll = setInterval(async () => {
+    try {
+      const p = await api(`/projects/${projectId}/collect/progress`);
+      if (p && p.active !== undefined) applyProgress(p);
+    } catch (_) {}
+  }, 1000);
+  const ticker = setInterval(tick, 250);
+  render();
+
+  function stop() {
+    stopped = true;
+    es?.close();
+    clearInterval(poll);
+    clearInterval(ticker);
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+  }
+
+  function finish(result) {
+    render();
+    stop();
+    const total = result?.messageCount != null ? result.messageCount + (result.skippedCount || 0) + (result.failedCount || 0) : state.total;
+    $('wiz-progress-done').textContent = total.toLocaleString();
+    $('wiz-progress-total').textContent = total.toLocaleString();
+    $('wiz-progress-pct').textContent = '100%';
+    $('wiz-progress-rate').textContent = '';
+    $('wiz-progress-eta').textContent = `Completed in ${wizFormatDuration(Date.now() - (state.p.startedAt || clientStart))}`;
+    $('wiz-progress-finish').textContent = '';
+  }
+
+  return { ready, stop, finish };
+}
+
 async function wizStartCollection() {
   if (!currentProject) { toast('Select a project first'); return; }
 
@@ -2215,76 +2384,8 @@ async function wizStartCollection() {
 
   wizGoToStep(6);
 
-  let progressInterval = null;
-
-  function formatTimeEstimate(ms) {
-    if (!ms || ms <= 0) return '';
-    const secs = Math.ceil(ms / 1000);
-    if (secs < 60) return `~${secs}s remaining`;
-    const mins = Math.floor(secs / 60);
-    const remSecs = secs % 60;
-    if (mins < 60) return remSecs > 0 ? `~${mins}m ${remSecs}s remaining` : `~${mins}m remaining`;
-    const hrs = Math.floor(mins / 60);
-    const remMins = mins % 60;
-    return remMins > 0 ? `~${hrs}h ${remMins}m remaining` : `~${hrs}h remaining`;
-  }
-
-  function formatElapsed(ms) {
-    if (!ms || ms <= 0) return '0s';
-    const secs = Math.floor(ms / 1000);
-    if (secs < 60) return `${secs}s`;
-    const mins = Math.floor(secs / 60);
-    const remSecs = secs % 60;
-    if (mins < 60) return `${mins}m ${remSecs}s`;
-    const hrs = Math.floor(mins / 60);
-    const remMins = mins % 60;
-    return `${hrs}h ${remMins}m`;
-  }
-
-  function updateProgressUI(p) {
-    const fill = document.getElementById('wiz-progress-fill');
-    const label = document.getElementById('wiz-progress-label');
-    const stats = document.getElementById('wiz-progress-stats');
-    if (!fill || !label) return;
-
-    const total = p.total || 0;
-    const done = (p.acquired || 0) + (p.failed || 0) + (p.skipped || 0);
-    const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
-    fill.style.width = pct + '%';
-
-    const timeEst = formatTimeEstimate(p.estimateMs);
-    const rate = p.itemsPerSec ? ` — ${p.itemsPerSec.toLocaleString()} items/s${p.bytesPerSec ? `, ${formatBytes(p.bytesPerSec)}/s` : ''}` : '';
-    let statusText = '';
-    if (p.phase === 'connecting') statusText = 'Connecting to mail server...';
-    else if (p.phase === 'enumerating') statusText = `Counting items${p.currentFolder ? ' in ' + p.currentFolder : ''}... ${total.toLocaleString()} found`;
-    else if (p.phase === 'retrying_failed') statusText = 'Retrying failed messages...';
-    else if (p.phase === 'finalizing') statusText = 'Finalizing collection...';
-    else if (p.retrying) statusText = `${done.toLocaleString()} / ${total.toLocaleString()} — retrying: ${p.retryItem || 'failed message'}...`;
-    else if (p.phase === 'collecting') statusText = `Collecting${p.currentFolder ? ' from ' + p.currentFolder : ''}: ${done.toLocaleString()} / ${total.toLocaleString()} (${pct}%)${rate}${timeEst ? ' — ' + timeEst : ''}`;
-    else statusText = `${pct}%`;
-
-    label.textContent = statusText;
-
-    if (stats) {
-      const elapsedMs = p.elapsedMs || (p.startedAt ? Date.now() - p.startedAt : 0);
-      const elapsed = elapsedMs ? formatElapsed(elapsedMs) : '';
-      stats.innerHTML = `
-        <div class="wiz-stat"><span>Acquired</span><strong>${(p.acquired || 0).toLocaleString()}</strong></div>
-        <div class="wiz-stat"><span>Failed</span><strong style="${p.failed > 0 ? 'color:var(--danger)' : ''}">${(p.failed || 0).toLocaleString()}</strong></div>
-        <div class="wiz-stat"><span>Skipped</span><strong>${(p.skipped || 0).toLocaleString()}</strong></div>
-        ${p.bytesDone ? `<div class="wiz-stat"><span>Downloaded</span><strong>${formatBytes(p.bytesDone)}</strong></div>` : ''}
-        ${p.connections ? `<div class="wiz-stat"><span>Connections</span><strong>${p.connections}${p.workers > p.connections ? ` × ${p.workers} streams` : ''}</strong></div>` : ''}
-        ${elapsed ? `<div class="wiz-stat"><span>Elapsed</span><strong>${elapsed}</strong></div>` : ''}
-      `;
-    }
-  }
-
-  progressInterval = setInterval(async () => {
-    try {
-      const p = await api(`/projects/${currentProject.id}/collect/progress`);
-      if (p && p.active !== undefined) updateProgressUI(p);
-    } catch (_) {}
-  }, 500);
+  const live = wizStartLiveProgress(currentProject.id);
+  await live.ready;
 
   try {
     if (wizConnection.protocol && currentProject.provider_type !== wizConnection.protocol) {
@@ -2304,7 +2405,7 @@ async function wizStartCollection() {
       }
     });
 
-    clearInterval(progressInterval);
+    live.finish(result);
 
     document.getElementById('wiz-progress-fill').style.width = '100%';
     document.getElementById('wiz-progress-fill').classList.add('complete');
@@ -2366,7 +2467,7 @@ async function wizStartCollection() {
       }
     }, 1500);
   } catch (err) {
-    clearInterval(progressInterval);
+    live.stop();
     document.getElementById('wiz-progress-label').innerHTML =
       `<span class="verify-fail">Failed to collect: ${esc(err.message)}</span>`;
   }

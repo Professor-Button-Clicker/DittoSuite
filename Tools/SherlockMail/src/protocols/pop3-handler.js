@@ -186,27 +186,26 @@ export class Pop3Handler {
     await this.ensureConnected();
     const list = await this.listMessages();
     const uidls = await this.listUidls();
-    let refs = list.map(m => ({ key: String(m.number), uid: m.number, serviceId: uidls.get(m.number) || null }));
+    let refs = list.map(m => ({ key: String(m.number), uid: m.number, serviceId: uidls.get(m.number) || null, size: m.size }));
     if (limit > 0) refs = refs.slice(0, limit);
     return { key: 'INBOX', refs };
   }
 
-  async fetchBatch(_key, refs) {
-    let results;
-    if (this.capabilities.has('PIPELINING')) {
-      results = await Promise.allSettled(refs.map(r => this.request(`RETR ${r.uid}`, true)));
-    } else {
-      results = [];
-      for (const r of refs) {
-        try { results.push({ status: 'fulfilled', value: await this.request(`RETR ${r.uid}`, true) }); }
-        catch (err) { results.push({ status: 'rejected', reason: err }); }
-      }
-    }
+  async fetchBatch(_key, refs, deliver) {
     const out = [];
-    results.forEach((res, i) => {
-      if (res.status === 'fulfilled') out.push({ ref: refs[i], raw: res.value.body, meta: { flags: [] } });
-    });
-    if (out.length === 0 && results.length) throw results[0].reason;
+    const emit = deliver || (item => out.push(item));
+    let delivered = 0;
+    let firstError = null;
+    const retrieve = (ref) => this.request(`RETR ${ref.uid}`, true).then(
+      ({ body }) => { delivered++; emit({ ref, raw: body, meta: { flags: [] } }); },
+      (err) => { firstError = firstError || err; },
+    );
+    if (this.capabilities.has('PIPELINING')) {
+      await Promise.all(refs.map(retrieve));
+    } else {
+      for (const ref of refs) await retrieve(ref);
+    }
+    if (!delivered && firstError) throw firstError;
     return out;
   }
 

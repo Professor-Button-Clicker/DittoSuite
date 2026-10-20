@@ -96,22 +96,38 @@ export class GraphHandler {
 
   async enumerate(folder, { limit } = {}) {
     const folderId = await this.resolveFolderId(folder);
-    const ids = [];
-    for (let url = `/me/mailFolders/${folderId}/messages?$select=id&$top=1000`; url && !(limit > 0 && ids.length >= limit); ) {
-      const data = await this.graphRequest(url);
-      for (const m of data.value || []) ids.push(m.id);
-      url = data['@odata.nextLink'] || null;
+    const base = `/me/mailFolders/${folderId}/messages?$select=id&$top=1000`;
+    // PR_MESSAGE_SIZE (0x0E08) gives each message's size so the ETA can be byte-based.
+    const withSize = `${base}&$expand=${encodeURIComponent("singleValueExtendedProperties($filter=id eq 'Long 0x0E08')")}`;
+    const list = async (firstUrl) => {
+      const rows = [];
+      for (let url = firstUrl; url && !(limit > 0 && rows.length >= limit); ) {
+        const data = await this.graphRequest(url);
+        for (const m of data.value || []) {
+          rows.push({ id: m.id, size: parseInt(m.singleValueExtendedProperties?.[0]?.value || '0', 10) });
+        }
+        url = data['@odata.nextLink'] || null;
+      }
+      return rows;
+    };
+    let rows;
+    try {
+      rows = await list(withSize);
+    } catch (err) {
+      if (err.status !== 400) throw err;
+      rows = await list(base);
     }
-    const selected = limit > 0 ? ids.slice(0, limit) : ids;
+    const selected = limit > 0 ? rows.slice(0, limit) : rows;
     this.log('CLIENT', `Enumerated ${selected.length} messages in ${folder}`);
-    return { key: folderId, refs: selected.map((id, i) => ({ key: id, uid: i + 1, serviceId: id })) };
+    return { key: folderId, refs: selected.map((r, i) => ({ key: r.id, uid: i + 1, serviceId: r.id, size: r.size })) };
   }
 
-  async fetchBatch(_folderId, refs) {
+  async fetchBatch(_folderId, refs, deliver) {
     const out = [];
+    const emit = deliver || (item => out.push(item));
     for (const ref of refs) {
       const raw = await this.graphRequest(`/me/messages/${ref.key}/$value`, { raw: true });
-      out.push({ ref, raw, meta: { flags: [] } });
+      emit({ ref, raw, meta: { flags: [] } });
     }
     return out;
   }
