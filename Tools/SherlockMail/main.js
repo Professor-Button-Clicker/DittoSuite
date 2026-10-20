@@ -3,6 +3,7 @@ import { dirname, join, isAbsolute } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
 import express from 'express';
+import { detectRedirectedAppData } from './src/util/appdata-redirect.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -79,6 +80,22 @@ async function createWindow(port) {
 }
 
 app.whenReady().then(async () => {
+  const redirect = detectRedirectedAppData(app.getPath('userData'));
+  if (redirect) {
+    const choice = dialog.showMessageBoxSync({
+      type: 'warning',
+      title: 'SherlockMail is running inside another app',
+      message: 'SherlockMail was started from inside another application\'s sandbox.',
+      detail: `Windows is redirecting everything SherlockMail saves into a private folder of the package "${redirect.packageName}":\n\n${redirect.redirectedDir}\n\nCollections, logs and the case database would be stored there instead of your normal SherlockMail data, and would be lost if that application is reset or uninstalled.\n\nClose SherlockMail and start it from the Start menu or a desktop shortcut.`,
+      buttons: ['Quit', 'Continue anyway'],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (choice === 0) {
+      app.quit();
+      return;
+    }
+  }
   if (!process.env.SHERLOCKMAIL_DATA_DIR) {
     process.env.SHERLOCKMAIL_DATA_DIR = join(app.getPath('userData'), 'data');
   }
