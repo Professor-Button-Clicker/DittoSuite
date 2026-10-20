@@ -107,11 +107,30 @@ function sanitizeFolderName(folderPath) {
   return folderPath.replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, ' ').trim() || 'INBOX';
 }
 
+const MIME_FOLDER_NAME = 'MIME (for Secondary Export Use)';
+
+// A second collection into the same destination must never write into an earlier collection's evidence.
+function unusedFolder(parent, name) {
+  let candidate = path.join(parent, name);
+  for (let n = 2; fs.existsSync(candidate) && fs.readdirSync(candidate).length > 0; n++) {
+    candidate = path.join(parent, `${name} (${n})`);
+  }
+  return candidate;
+}
+
+// With a destination chosen, the whole collection (raw MIME, logs, exports) lives there; otherwise it
+// stays in the app's data folder.
 function createSessionOutputDir(projectId, sessionName, destinationDir) {
-  const sessionDir = path.join(DATA_DIR, 'projects', projectId, 'sessions', sessionName);
-  const mimeDir = path.join(sessionDir, 'MIME');
-  // Logs go next to the exported evidence in the examiner's chosen destination, when one is set.
-  const logsDir = destinationDir ? path.join(destinationDir, 'Logs') : path.join(sessionDir, 'Logs');
+  let sessionDir, mimeDir, logsDir;
+  if (destinationDir) {
+    sessionDir = destinationDir;
+    mimeDir = unusedFolder(destinationDir, MIME_FOLDER_NAME);
+    logsDir = path.join(destinationDir, 'Logs');
+  } else {
+    sessionDir = path.join(DATA_DIR, 'projects', projectId, 'sessions', sessionName);
+    mimeDir = path.join(sessionDir, 'MIME');
+    logsDir = path.join(sessionDir, 'Logs');
+  }
   fs.mkdirSync(mimeDir, { recursive: true });
   fs.mkdirSync(logsDir, { recursive: true });
   return { sessionDir, mimeDir, logsDir };
@@ -1211,6 +1230,7 @@ router.post('/projects/:id/collect', async (req, res) => {
       totalBytes,
       folderStats,
       sessionDir,
+      destinationDir,
       mimeOutputDir: mimeDir,
       logsDir: logResult.logsDir,
       logFiles: logResult.files,
@@ -3164,6 +3184,10 @@ router.post('/projects/:id/transfer', async (req, res) => {
   if (!source || !destination) return res.status(400).json({ error: 'Source and destination are required' });
 
   if (!fs.existsSync(source)) return res.status(400).json({ error: 'Source directory does not exist' });
+  const norm = p => path.resolve(p).replace(/[\\/]+$/, '').toLowerCase() + path.sep;
+  if (norm(destination).startsWith(norm(source))) {
+    return res.status(400).json({ error: 'Choose a transfer destination outside the folder being transferred; copying a folder into itself would never finish.' });
+  }
 
   const log = [];
 

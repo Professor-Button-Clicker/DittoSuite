@@ -2573,7 +2573,8 @@ function wizShowResults(result) {
     ` : ''}
   `;
 
-  const srcDir = result.sessionDir || wizOutputDir || `./data/exports/${currentProject?.id || ''}`;
+  // Transfer the collection from where its evidence was saved: the chosen destination when there is one.
+  const srcDir = result.destinationDir || wizOutputDir || result.sessionDir || `./data/exports/${currentProject?.id || ''}`;
   const transferSrc = document.getElementById('wiz-transfer-source');
   if (transferSrc) transferSrc.value = srcDir;
 
