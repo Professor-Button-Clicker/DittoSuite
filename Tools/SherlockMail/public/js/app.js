@@ -2253,22 +2253,27 @@ async function wizStartCollection() {
     fill.style.width = pct + '%';
 
     const timeEst = formatTimeEstimate(p.estimateMs);
+    const rate = p.itemsPerSec ? ` — ${p.itemsPerSec.toLocaleString()} items/s${p.bytesPerSec ? `, ${formatBytes(p.bytesPerSec)}/s` : ''}` : '';
     let statusText = '';
     if (p.phase === 'connecting') statusText = 'Connecting to mail server...';
+    else if (p.phase === 'enumerating') statusText = `Counting items${p.currentFolder ? ' in ' + p.currentFolder : ''}... ${total.toLocaleString()} found`;
     else if (p.phase === 'retrying_failed') statusText = 'Retrying failed messages...';
     else if (p.phase === 'finalizing') statusText = 'Finalizing collection...';
-    else if (p.retrying) statusText = `Retrying: ${p.retryItem || 'failed message'}...`;
-    else if (p.phase === 'collecting') statusText = `Collecting${p.currentFolder ? ' from ' + p.currentFolder : ''}... ${done} of ${total} items (${pct}%)${timeEst ? ' — ' + timeEst : ''}`;
+    else if (p.retrying) statusText = `${done.toLocaleString()} / ${total.toLocaleString()} — retrying: ${p.retryItem || 'failed message'}...`;
+    else if (p.phase === 'collecting') statusText = `Collecting${p.currentFolder ? ' from ' + p.currentFolder : ''}: ${done.toLocaleString()} / ${total.toLocaleString()} (${pct}%)${rate}${timeEst ? ' — ' + timeEst : ''}`;
     else statusText = `${pct}%`;
 
     label.textContent = statusText;
 
     if (stats) {
-      const elapsed = p.startedAt ? formatElapsed(Date.now() - p.startedAt) : '';
+      const elapsedMs = p.elapsedMs || (p.startedAt ? Date.now() - p.startedAt : 0);
+      const elapsed = elapsedMs ? formatElapsed(elapsedMs) : '';
       stats.innerHTML = `
-        <div class="wiz-stat"><span>Acquired</span><strong>${p.acquired || 0}</strong></div>
-        <div class="wiz-stat"><span>Failed</span><strong style="${p.failed > 0 ? 'color:var(--danger)' : ''}">${p.failed || 0}</strong></div>
-        <div class="wiz-stat"><span>Skipped</span><strong>${p.skipped || 0}</strong></div>
+        <div class="wiz-stat"><span>Acquired</span><strong>${(p.acquired || 0).toLocaleString()}</strong></div>
+        <div class="wiz-stat"><span>Failed</span><strong style="${p.failed > 0 ? 'color:var(--danger)' : ''}">${(p.failed || 0).toLocaleString()}</strong></div>
+        <div class="wiz-stat"><span>Skipped</span><strong>${(p.skipped || 0).toLocaleString()}</strong></div>
+        ${p.bytesDone ? `<div class="wiz-stat"><span>Downloaded</span><strong>${formatBytes(p.bytesDone)}</strong></div>` : ''}
+        ${p.connections ? `<div class="wiz-stat"><span>Connections</span><strong>${p.connections}${p.workers > p.connections ? ` × ${p.workers} streams` : ''}</strong></div>` : ''}
         ${elapsed ? `<div class="wiz-stat"><span>Elapsed</span><strong>${elapsed}</strong></div>` : ''}
       `;
     }

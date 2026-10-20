@@ -1,8 +1,14 @@
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
-import { getAccessToken, getAuthStatus } from '../services/microsoft-oauth.js';
+import { getAccessToken, refreshAccessToken, getAuthStatus } from '../services/microsoft-oauth.js';
 
 const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
+const TOKEN_REUSE_MS = 30000;
+const WELL_KNOWN_FOLDERS = {
+  inbox: 'inbox', 'sent items': 'sentitems', sent: 'sentitems', drafts: 'drafts',
+  'deleted items': 'deleteditems', trash: 'deleteditems', 'junk email': 'junkemail', junk: 'junkemail',
+  archive: 'archive', outbox: 'outbox',
+};
 
 export class GraphHandler {
   constructor(config) {
@@ -13,6 +19,7 @@ export class GraphHandler {
   }
 
   log(direction, message) {
+    if (this.protocolLog.length >= 5000) this.protocolLog.shift();
     this.protocolLog.push({
       timestamp: new Date().toISOString(),
       direction,
@@ -20,25 +27,93 @@ export class GraphHandler {
     });
   }
 
-  async graphFetch(path, options = {}) {
-    const url = path.startsWith('http') ? path : `${GRAPH_BASE}${path}`;
-    const res = await fetch(url, {
-      ...options,
-      headers: {
-        Authorization: `Bearer ${this.accessToken}`,
-        ...options.headers,
-      },
-    });
+  // Single-flight token access: concurrent workers share one in-flight read/refresh.
+  getToken() {
+    if (!this.tokenPromise || Date.now() - this.tokenFetchedAt > TOKEN_REUSE_MS) {
+      this.tokenFetchedAt = Date.now();
+      this.tokenPromise = getAccessToken().catch(err => { this.tokenPromise = null; throw err; });
+    }
+    return this.tokenPromise;
+  }
 
+  forceTokenRefresh() {
+    this.tokenFetchedAt = Date.now();
+    this.tokenPromise = refreshAccessToken().then(t => t.access_token).catch(err => { this.tokenPromise = null; throw err; });
+    return this.tokenPromise;
+  }
+
+  async graphRequest(pathOrUrl, { raw = false, retriedAuth = false } = {}) {
+    const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${GRAPH_BASE}${pathOrUrl}`;
+    const token = await this.getToken();
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+
+    if (res.status === 401 && !retriedAuth) {
+      await this.forceTokenRefresh();
+      return this.graphRequest(pathOrUrl, { raw, retriedAuth: true });
+    }
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error?.message || `Graph API error (${res.status})`);
+      const body = await res.json().catch(() => ({}));
+      const err = new Error(body.error?.message || `Graph API error (${res.status})`);
+      err.status = res.status;
+      if (res.status === 429 || res.status === 503 || res.status === 504) {
+        const ra = parseFloat(res.headers.get('retry-after'));
+        if (!isNaN(ra)) err.retryAfterMs = ra * 1000;
+      } else if (res.status === 400 || res.status === 403 || res.status === 404) {
+        err.permanent = true;
+      }
+      throw err;
     }
+    return raw ? Buffer.from(await res.arrayBuffer()) : res.json();
+  }
 
-    if (res.headers.get('content-type')?.includes('application/json')) {
-      return res.json();
+  async graphFetch(path) {
+    return this.graphRequest(path);
+  }
+
+  async listAllPages(firstUrl) {
+    const rows = [];
+    for (let url = firstUrl; url; ) {
+      const data = await this.graphRequest(url);
+      rows.push(...(data.value || []));
+      url = data['@odata.nextLink'] || null;
     }
-    return res;
+    return rows;
+  }
+
+  async resolveFolderId(folder) {
+    if (!this.folderIds) {
+      const all = await this.listFolders();
+      this.folderIds = new Map(all.map(f => [f.path, f.graphFolderId]));
+    }
+    if (this.folderIds.has(folder)) return this.folderIds.get(folder);
+    const wellKnown = WELL_KNOWN_FOLDERS[String(folder).toLowerCase()];
+    if (wellKnown) return wellKnown;
+    if (/^[A-Za-z0-9_=-]{40,}$/.test(folder)) return folder;
+    const err = new Error(`Folder "${folder}" not found`);
+    err.permanent = true;
+    throw err;
+  }
+
+  async enumerate(folder, { limit } = {}) {
+    const folderId = await this.resolveFolderId(folder);
+    const ids = [];
+    for (let url = `/me/mailFolders/${folderId}/messages?$select=id&$top=1000`; url && !(limit > 0 && ids.length >= limit); ) {
+      const data = await this.graphRequest(url);
+      for (const m of data.value || []) ids.push(m.id);
+      url = data['@odata.nextLink'] || null;
+    }
+    const selected = limit > 0 ? ids.slice(0, limit) : ids;
+    this.log('CLIENT', `Enumerated ${selected.length} messages in ${folder}`);
+    return { key: folderId, refs: selected.map((id, i) => ({ key: id, uid: i + 1, serviceId: id })) };
+  }
+
+  async fetchBatch(_folderId, refs) {
+    const out = [];
+    for (const ref of refs) {
+      const raw = await this.graphRequest(`/me/messages/${ref.key}/$value`, { raw: true });
+      out.push({ ref, raw, meta: { flags: [] } });
+    }
+    return out;
   }
 
   async connect() {
@@ -47,7 +122,7 @@ export class GraphHandler {
       throw new Error('Microsoft account not authorized. Click "Authorize with Microsoft" first.');
     }
 
-    this.accessToken = await getAccessToken();
+    this.accessToken = await this.getToken();
 
     this.log('CLIENT', 'Connecting to Microsoft Graph API via OAuth2');
     this.log('C→S', `GET ${GRAPH_BASE}/me`);
@@ -71,39 +146,30 @@ export class GraphHandler {
   }
 
   async listFolders() {
-    this.log('C→S', `GET ${GRAPH_BASE}/me/mailFolders?$top=100`);
+    this.log('C→S', `GET ${GRAPH_BASE}/me/mailFolders (recursive)`);
 
-    const data = await this.graphFetch('/me/mailFolders?$top=100');
-    const mailFolders = data.value || [];
-
-    const folders = mailFolders.map(f => ({
-      id: uuidv4(),
-      path: f.displayName,
-      name: f.displayName,
-      graphFolderId: f.id,
-      totalMessages: f.totalItemCount || 0,
-      unseenMessages: f.unreadItemCount || 0,
-    }));
-
-    this.log('S→C', `200 OK - ${folders.length} mail folders returned`);
-
-    for (const f of mailFolders) {
-      const childData = await this.graphFetch(`/me/mailFolders/${f.id}/childFolders?$top=50`);
-      if (childData.value?.length) {
-        for (const child of childData.value) {
-          folders.push({
-            id: uuidv4(),
-            path: `${f.displayName}/${child.displayName}`,
-            name: child.displayName,
-            graphFolderId: child.id,
-            totalMessages: child.totalItemCount || 0,
-            unseenMessages: child.unreadItemCount || 0,
-            parentPath: f.displayName,
-          });
+    const select = '$select=id,displayName,totalItemCount,unreadItemCount,childFolderCount&$top=250';
+    const folders = [];
+    const walk = async (rows, parentPath) => {
+      for (const f of rows) {
+        const folderPath = parentPath ? `${parentPath}/${f.displayName}` : f.displayName;
+        folders.push({
+          id: uuidv4(),
+          path: folderPath,
+          name: f.displayName,
+          graphFolderId: f.id,
+          totalMessages: f.totalItemCount || 0,
+          unseenMessages: f.unreadItemCount || 0,
+          parentPath: parentPath || undefined,
+        });
+        if (f.childFolderCount > 0) {
+          await walk(await this.listAllPages(`/me/mailFolders/${f.id}/childFolders?${select}`), folderPath);
         }
       }
-    }
+    };
+    await walk(await this.listAllPages(`/me/mailFolders?${select}`), null);
 
+    this.log('S→C', `200 OK - ${folders.length} mail folders returned`);
     return folders;
   }
 

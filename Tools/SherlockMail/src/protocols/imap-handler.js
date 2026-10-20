@@ -3,6 +3,19 @@ import { simpleParser } from 'mailparser';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 
+const MAX_LOG_ENTRIES = 5000;
+
+function compactUidSet(uids) {
+  const sorted = [...uids].sort((a, b) => a - b);
+  const parts = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const start = sorted[i];
+    while (i + 1 < sorted.length && sorted[i + 1] === sorted[i] + 1) i++;
+    parts.push(start === sorted[i] ? `${start}` : `${start}:${sorted[i]}`);
+  }
+  return parts.join(',');
+}
+
 export class ImapHandler {
   constructor(config) {
     this.config = config;
@@ -11,6 +24,7 @@ export class ImapHandler {
   }
 
   log(direction, message) {
+    if (this.protocolLog.length >= MAX_LOG_ENTRIES) this.protocolLog.splice(0, this.protocolLog.length - MAX_LOG_ENTRIES + 1);
     this.protocolLog.push({
       timestamp: new Date().toISOString(),
       direction,
@@ -31,7 +45,8 @@ export class ImapHandler {
       socketTimeout: 210000,
       greetingTimeout: 195000,
       logger: {
-        debug: (msg) => this.log('DEBUG', msg),
+        // imapflow emits a debug entry per protocol line; serializing those dominated CPU on large pulls.
+        debug: () => {},
         info: (msg) => this.log('INFO', msg),
         warn: (msg) => this.log('WARN', msg),
         error: (msg) => this.log('ERROR', msg),
@@ -39,9 +54,65 @@ export class ImapHandler {
       emitLogs: false,
     });
 
-    await this.client.connect();
+    // Without a listener, imapflow's 'error' event (e.g. idle socket timeout) is unhandled and kills the process.
+    const client = this.client;
+    client.on('error', (err) => this.log('ERROR', `Connection error: ${err.message}`));
+    try {
+      await client.connect();
+    } catch (err) {
+      client.close();
+      throw err;
+    }
     this.log('CLIENT', `Connected to ${host}:${effectivePort}`);
     return { success: true, host, port: effectivePort };
+  }
+
+  cloneForWorker() {
+    const h = new ImapHandler(this.config);
+    h.protocolLog = this.protocolLog;
+    return h;
+  }
+
+  async ensureConnected() {
+    if (!this.client || !this.client.usable) await this.connect();
+  }
+
+  async openReadOnly(folderPath) {
+    const mb = this.client.mailbox;
+    if (!mb || mb.path !== folderPath || !mb.readOnly) {
+      await this.client.mailboxOpen(folderPath, { readOnly: true });
+    }
+    return this.client.mailbox;
+  }
+
+  async enumerate(folderPath, { limit, searchCriteria } = {}) {
+    await this.ensureConnected();
+    const box = await this.openReadOnly(folderPath);
+    let uids = box.exists > 0 ? await this.client.search(searchCriteria || { all: true }, { uid: true }) : [];
+    uids = (uids || []).sort((a, b) => a - b);
+    if (limit > 0) uids = uids.slice(0, limit);
+    this.log('CLIENT', `Enumerated ${uids.length} UIDs in ${folderPath} (EXISTS ${box.exists}, UIDVALIDITY ${box.uidValidity})`);
+    return { key: folderPath, refs: uids.map(uid => ({ key: String(uid), uid })) };
+  }
+
+  async fetchBatch(folderPath, refs) {
+    await this.openReadOnly(folderPath);
+    const byUid = new Map(refs.map(r => [r.uid, r]));
+    const out = [];
+    const query = { uid: true, flags: true, internalDate: true, source: true };
+    for await (const m of this.client.fetch(compactUidSet(byUid.keys()), query, { uid: true })) {
+      const ref = byUid.get(m.uid);
+      if (!ref || !m.source) continue;
+      out.push({
+        ref,
+        raw: m.source,
+        meta: {
+          flags: m.flags ? [...m.flags] : [],
+          internalDate: m.internalDate ? new Date(m.internalDate).toISOString() : null,
+        },
+      });
+    }
+    return out;
   }
 
   async listFolders() {
@@ -69,14 +140,15 @@ export class ImapHandler {
     flatten(tree.folders || [], null);
 
     for (const folder of folders) {
+      if (folder.flags instanceof Set ? folder.flags.has('\\Noselect') : (folder.flags || []).includes('\\Noselect')) {
+        folder.totalMessages = 0;
+        folder.unseenMessages = 0;
+        continue;
+      }
       try {
-        const lock = await this.client.getMailboxLock(folder.path);
-        try {
-          folder.totalMessages = this.client.mailbox.exists || 0;
-          folder.unseenMessages = this.client.mailbox.unseen || 0;
-        } finally {
-          lock.release();
-        }
+        const st = await this.client.status(folder.path, { messages: true, unseen: true });
+        folder.totalMessages = st.messages || 0;
+        folder.unseenMessages = st.unseen || 0;
       } catch {
         folder.totalMessages = 0;
         folder.unseenMessages = 0;
@@ -215,7 +287,9 @@ export class ImapHandler {
 
   async disconnect() {
     if (this.client) {
-      await this.client.logout();
+      if (this.client.usable) await this.client.logout();
+      else this.client.close();
+      this.client = null;
       this.log('CLIENT', 'Disconnected');
     }
   }

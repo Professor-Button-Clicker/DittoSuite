@@ -4,7 +4,7 @@
     {
       "name": "sherlock-mail",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["server.js"],
+      "runtimeArgs": ["server.js", "--no-browser"],
       "port": 3000
     }
   ]

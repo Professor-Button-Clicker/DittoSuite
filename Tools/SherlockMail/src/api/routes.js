@@ -9,10 +9,10 @@ import { fileURLToPath } from 'url';
 const execFileAsync = promisify(execFile);
 import {
   createProject, getProjects, getProjectsSummary, getProject, deleteProject, updateProjectStatus, updateProject,
-  saveFolders, getFolders, createAcquisition, saveMessage, getMessages, getMessageCount,
+  saveFolders, getFolders, createAcquisition, saveMessage, saveMessagesBatch, getMessages, getMessageCount,
   saveSearchQuery, getSearchQueries, saveExportRecord, getExportRecords, updateExportRecord,
   getAuditLog, getFullAuditLog, getStats, addAuditEntry,
-  getMessage, getAllProjectMessages, updateAcquisition, getAcquisitions,
+  getMessage, getAllProjectMessages, getProjectMessageKeys, updateAcquisition, getAcquisitions,
   saveAttachment, getAttachments, getProjectAttachments,
   saveDriveLink, getDriveLinks,
   saveTimestampRecord, getTimestampRecords,
@@ -32,6 +32,7 @@ import { InlineSearchEngine } from '../services/inline-search.js';
 import { QualityControlService } from '../services/quality-control.js';
 import { CloudAttachmentService } from '../services/cloud-attachment-service.js';
 import { TimestampService } from '../services/timestamp-service.js';
+import { runCollection, supportsEngine } from '../services/collection-engine.js';
 import {
   getAuthStatus, getAuthUrl, saveCredentials, loadCredentials,
   startCallbackServer, waitForAuth, stopCallbackServer, revokeTokens,
@@ -149,8 +150,16 @@ function writeEmlFile(mimeDir, folderName, msg, folderMsgIndex, maxPerSubfolder 
   }
 
   fs.writeFileSync(filePath, rawBuffer);
-  const fileHash = crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
-  return { filePath, fileHash, size: rawBuffer.length };
+  return { filePath, size: rawBuffer.length };
+}
+
+function emlTargetPath(mimeDir, folderName, msg, folderMsgIndex, maxPerSubfolder = 5000) {
+  const sanitized = sanitizeFolderName(folderName);
+  const targetDir = maxPerSubfolder > 0 && folderMsgIndex >= maxPerSubfolder
+    ? path.join(mimeDir, sanitized, `Part_${Math.floor(folderMsgIndex / maxPerSubfolder) + 1}`)
+    : path.join(mimeDir, sanitized);
+  const safeSubject = (msg.subject || 'no_subject').slice(0, 50).replace(/[<>:"/\\|?*\r\n\t]/g, '_');
+  return { targetDir, filePath: path.join(targetDir, `${msg.uid || 'unknown'}_${safeSubject}.eml`) };
 }
 
 async function checkDiskSpace(targetPath, minFreeBytes = 500 * 1024 * 1024) {
@@ -734,6 +743,106 @@ function processMessageItem(msg, projectId, acquisitionId, existingIds, differen
   }
 }
 
+const DB_FLUSH_SIZE = 200;
+const DB_FLUSH_INTERVAL_MS = 2000;
+
+function createCollectionSink({ projectId, acquisitionId, mimeDir, differential, existingIds, progress, errors, folderStats, downloadedItems, differentialExclusions }) {
+  const folderCounters = {};
+  const madeDirs = new Set();
+  let pending = [];
+  let lastFlush = Date.now();
+  const statsFor = folder => folderStats[folder] || (folderStats[folder] = { acquired: 0, skipped: 0, failed: 0 });
+
+  function flush() {
+    lastFlush = Date.now();
+    if (!pending.length) return;
+    const batch = pending;
+    pending = [];
+    try {
+      saveMessagesBatch(batch);
+    } catch {
+      for (const msg of batch) {
+        try {
+          saveMessagesBatch([msg]);
+        } catch (err) {
+          const idx = downloadedItems.findIndex(d => d.id === msg.id);
+          if (idx >= 0) downloadedItems.splice(idx, 1);
+          const stats = statsFor(msg.folder);
+          stats.acquired--; stats.failed++;
+          progress.acquired--; progress.failed++;
+          errors.push({
+            messageId: msg.messageId || msg.id, subject: (msg.subject || '').slice(0, 100), folder: msg.folder,
+            error: err.message, timestamp: new Date().toISOString(), type: 'message_error',
+          });
+        }
+      }
+    }
+  }
+
+  async function add(msg, folder) {
+    msg.projectId = projectId;
+    msg.acquisitionId = acquisitionId;
+    msg.folder = folder;
+    const stats = statsFor(folder);
+
+    if (differential && (existingIds.has(msg.messageId) || existingIds.has(msg.hashSha256))) {
+      differentialExclusions.push({ messageId: msg.messageId, hashSha256: msg.hashSha256, folder });
+      stats.skipped++;
+      progress.skipped++;
+      return;
+    }
+
+    const index = folderCounters[folder] || 0;
+    folderCounters[folder] = index + 1;
+    const { targetDir, filePath } = emlTargetPath(mimeDir, folder, msg, index);
+    if (!madeDirs.has(targetDir)) {
+      await fs.promises.mkdir(targetDir, { recursive: true });
+      madeDirs.add(targetDir);
+    }
+    await fs.promises.writeFile(filePath, msg.rawMime);
+    msg.emlPath = filePath;
+    delete msg.rawMime;
+
+    pending.push(msg);
+    downloadedItems.push({
+      id: msg.id, uid: msg.uid, messageId: msg.messageId, folder, subject: msg.subject,
+      fromAddress: msg.fromAddress, date: msg.date, size: msg.size, hashSha256: msg.hashSha256, emlPath: filePath,
+    });
+    stats.acquired++;
+    progress.acquired++;
+    if (pending.length >= DB_FLUSH_SIZE || Date.now() - lastFlush > DB_FLUSH_INTERVAL_MS) flush();
+  }
+
+  return { add, flush };
+}
+
+async function createEngineHandler(protocol, config, project) {
+  switch (protocol) {
+    case 'imap':
+      if (!config?.host) throw new Error('IMAP host is required');
+      return new ImapHandler(config);
+    case 'pop3':
+      if (!config?.host) throw new Error('POP3 host is required');
+      return new Pop3Handler(config);
+    case 'ews': {
+      const ewsConfig = { ...(config || {}) };
+      ewsConfig.email = ewsConfig.email || project.target_email;
+      if (!ewsConfig.password && msGetAuthStatus().authorized) {
+        ewsConfig.authType = 'oauth2';
+        ewsConfig.tokenProvider = msGetAccessToken;
+        ewsConfig.accessToken = await msGetAccessToken();
+      }
+      return new EwsHandler(ewsConfig);
+    }
+    case 'graph':
+      return new GraphHandler(config || { email: project.target_email, authType: 'delegated' });
+    case 'gmail_api':
+      return new GmailHandler(config || { email: project.target_email, authType: 'oauth2' });
+    default:
+      throw new Error(`Unsupported protocol: ${protocol}`);
+  }
+}
+
 router.post('/projects/:id/collect', async (req, res) => {
   const project = getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
@@ -760,8 +869,8 @@ router.post('/projects/:id/collect', async (req, res) => {
   collectionProgress.set(project.id, progress);
   const startedAt = new Date().toISOString();
 
+  let handler;
   try {
-    let handler;
     const allMessages = [];
     let skippedCount = 0;
     let failedCount = 0;
@@ -774,8 +883,7 @@ router.post('/projects/:id/collect', async (req, res) => {
 
     const existingIds = new Set();
     if (differential) {
-      const existing = getAllProjectMessages(project.id);
-      for (const m of existing) {
+      for (const m of getProjectMessageKeys(project.id)) {
         if (m.message_id) existingIds.add(m.message_id);
         if (m.hash_sha256) existingIds.add(m.hash_sha256);
       }
@@ -794,124 +902,57 @@ router.post('/projects/:id/collect', async (req, res) => {
 
     const effectiveProtocol = config?.protocol || project.provider_type;
 
-    switch (effectiveProtocol) {
-      case 'imap': {
-        if (!config?.host) throw new Error('IMAP host is required');
-        handler = new ImapHandler(config);
-        progress.phase = 'connecting';
-        await retryWithBackoff(() => handler.connect());
-        progress.phase = 'collecting';
+    if (supportsEngine(effectiveProtocol)) {
+      handler = await createEngineHandler(effectiveProtocol, config, project);
+      progress.phase = 'connecting';
+      await retryWithBackoff(() => handler.connect());
 
-        const allUids = {};
-        for (const folder of targetFolders) {
-          progress.currentFolder = folder;
-          try {
-            allUids[folder] = await retryWithBackoff(() =>
-              handler.listMessageUids(folder, { limit, searchCriteria: searchQuery })
-            );
-            progress.total += allUids[folder].length;
-          } catch (folderErr) {
-            errors.push({ folder, error: folderErr.message, timestamp: new Date().toISOString(), type: 'folder_error' });
-            progress.errors.push(`${folder}: ${folderErr.message}`);
-            allUids[folder] = [];
-          }
-        }
+      const sink = createCollectionSink({
+        projectId: project.id, acquisitionId, mimeDir, differential, existingIds,
+        progress, errors, folderStats, downloadedItems, differentialExclusions,
+      });
+      const pushProgressError = (text) => {
+        progress.errors.push(text);
+        if (progress.errors.length > 100) progress.errors.shift();
+      };
 
-        for (const folder of targetFolders) {
-          const stats = { acquired: 0, skipped: 0, failed: 0 };
-          progress.currentFolder = folder;
-          for (const uid of allUids[folder]) {
-            try {
-              const msg = await retryWithBackoff(() => handler.fetchSingleMessage(folder, uid));
-              const result = processAndTrack(msg, folder);
-              if (result === 'skipped') stats.skipped++;
-              else if (result === 'failed') stats.failed++;
-              else stats.acquired++;
-            } catch (msgErr) {
-              errors.push({ folder, uid, error: msgErr.message, timestamp: new Date().toISOString(), type: 'message_error' });
-              progress.errors.push(`${folder} UID ${uid}: ${msgErr.message}`);
-              failedCount++;
-              progress.failed++;
-              stats.failed++;
-            }
-            progress.elapsedMs = Date.now() - progress.startedAt;
-            const done = progress.acquired + progress.failed + progress.skipped;
-            if (done > 0 && progress.total > 0) {
-              progress.estimateMs = Math.round((progress.elapsedMs / done) * (progress.total - done));
-            }
-          }
-          folderStats[folder] = stats;
-        }
-
-        await handler.disconnect().catch(() => {});
-        break;
+      try {
+        await runCollection({
+          protocol: effectiveProtocol,
+          primary: handler,
+          folders: effectiveProtocol === 'pop3' ? ['INBOX'] : targetFolders,
+          limit,
+          searchCriteria: searchQuery,
+          progress,
+          overrides: { workers: parseInt(config?.connections, 10) || 0 },
+          onRecord: sink.add,
+          onFailure: ({ folder, ref, error, stage }) => {
+            const stats = folderStats[folder] || (folderStats[folder] = { acquired: 0, skipped: 0, failed: 0 });
+            stats.failed++;
+            progress.failed++;
+            errors.push({
+              folder, uid: ref?.uid, messageId: ref?.serviceId || null, error: error.message,
+              timestamp: new Date().toISOString(), type: stage === 'fetch' ? 'message_fetch_error' : 'message_error',
+            });
+            pushProgressError(`${folder} #${ref?.uid ?? '?'}: ${error.message}`);
+          },
+          onFolderError: (folder, err) => {
+            errors.push({ folder, error: err.message, timestamp: new Date().toISOString(), type: 'folder_error' });
+            pushProgressError(`${folder}: ${err.message}`);
+          },
+        });
+      } finally {
+        sink.flush();
       }
 
-      case 'pop3': {
-        if (!config?.host) throw new Error('POP3 host is required');
-        handler = new Pop3Handler(config);
-        progress.phase = 'connecting';
-        await retryWithBackoff(() => handler.connect());
-        progress.phase = 'collecting';
-
-        const msgList = await handler.listMessages();
-        const fetchCount = limit > 0 ? Math.min(msgList.length, limit) : msgList.length;
-        const stats = { acquired: 0, skipped: 0, failed: 0 };
-        progress.total = fetchCount;
-
-        for (let i = 0; i < fetchCount; i++) {
-          try {
-            const msg = await retryWithBackoff(() => handler.fetchMessage(msgList[i].number));
-            const result = processAndTrack(msg, 'INBOX');
-            if (result === 'skipped') stats.skipped++;
-            else if (result === 'failed') stats.failed++;
-            else stats.acquired++;
-          } catch (msgErr) {
-            progress.retrying = true;
-            progress.retryItem = `Message ${i + 1}`;
-            try {
-              const msg = await handler.fetchMessage(msgList[i].number);
-              const result = processAndTrack(msg, 'INBOX');
-              if (result === 'skipped') stats.skipped++;
-              else if (result === 'failed') stats.failed++;
-              else stats.acquired++;
-            } catch (retryErr) {
-              failedCount++;
-              stats.failed++;
-              progress.failed++;
-              errors.push({ index: i, error: retryErr.message, timestamp: new Date().toISOString(), type: 'message_fetch_error' });
-              progress.errors.push(`Message ${i + 1}: ${retryErr.message}`);
-            }
-            progress.retrying = false;
-          }
-          progress.elapsedMs = Date.now() - progress.startedAt;
-          const done = progress.acquired + progress.failed + progress.skipped;
-          if (done > 0 && progress.total > 0) {
-            progress.estimateMs = Math.round((progress.elapsedMs / done) * (progress.total - done));
-          }
-        }
-        folderStats['INBOX'] = stats;
-
-        await handler.disconnect().catch(() => {});
-        break;
-      }
-
-      case 'ews':
-      case 'graph':
-      case 'gmail_api':
+      for (const item of downloadedItems) allMessages.push(item);
+      skippedCount = progress.skipped;
+      failedCount = progress.failed;
+      await handler.disconnect().catch(() => {});
+    } else switch (effectiveProtocol) {
       case 'zoho_api':
       case 'jmap': {
         const handlers = {
-          ews:      async () => {
-            const ewsConfig = config || { email: project.target_email };
-            if (!ewsConfig.password && msGetAuthStatus().authorized) {
-              ewsConfig.authType = 'oauth2';
-              ewsConfig.accessToken = await msGetAccessToken();
-            }
-            return new EwsHandler(ewsConfig);
-          },
-          graph:    () => new GraphHandler(config || { email: project.target_email, authType: 'delegated' }),
-          gmail_api:() => new GmailHandler(config || { email: project.target_email, authType: 'oauth2' }),
           zoho_api: () => new ZohoHandler(config || { email: project.target_email }),
           jmap:     () => new JmapHandler(config || { email: project.target_email }),
         };
@@ -1042,6 +1083,7 @@ router.post('/projects/:id/collect', async (req, res) => {
       timestamp: tsResult.timestamp.genTime,
     });
   } catch (err) {
+    await handler?.disconnect().catch(() => {});
     progress.active = false;
     progress.phase = 'error';
     progress.errors.push(err.message);

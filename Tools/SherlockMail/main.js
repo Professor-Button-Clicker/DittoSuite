@@ -3,14 +3,16 @@ import { dirname, join, isAbsolute } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
 import express from 'express';
-import apiRoutes from './src/api/routes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let mainWindow;
 let server;
 
-function startServer() {
+async function startServer() {
+  // Imported here, not statically: routes and services read SHERLOCKMAIL_DATA_DIR at module load,
+  // and a static import would evaluate them before it is set, pointing them into the read-only asar.
+  const { default: apiRoutes } = await import('./src/api/routes.js');
   return new Promise((resolve) => {
     const expressApp = express();
     expressApp.use(express.json({ limit: '50mb' }));

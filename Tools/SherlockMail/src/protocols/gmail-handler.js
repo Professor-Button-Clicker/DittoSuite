@@ -12,6 +12,7 @@ export class GmailHandler {
   }
 
   log(direction, message) {
+    if (this.protocolLog.length >= 5000) this.protocolLog.shift();
     this.protocolLog.push({
       timestamp: new Date().toISOString(),
       direction,
@@ -51,9 +52,9 @@ export class GmailHandler {
     const res = await this.gmail.users.labels.list({ userId: 'me' });
     const labels = res.data.labels || [];
 
+    const details = await Promise.all(labels.map(label => this.gmail.users.labels.get({ userId: 'me', id: label.id })));
     const folders = [];
-    for (const label of labels) {
-      const detail = await this.gmail.users.labels.get({ userId: 'me', id: label.id });
+    for (const detail of details) {
       const d = detail.data;
       folders.push({
         id: uuidv4(),
@@ -139,6 +140,80 @@ export class GmailHandler {
 
     this.log('CLIENT', `Fetched ${messages.length} messages from ${labelId} via Gmail API`);
     return messages;
+  }
+
+  async call(fn) {
+    try {
+      return await fn();
+    } catch (err) {
+      const status = err.response?.status || err.code;
+      const reason = err.errors?.[0]?.reason || '';
+      if (status === 429 || (status === 403 && /rateLimitExceeded|userRateLimitExceeded/.test(reason))) {
+        const ra = parseFloat(err.response?.headers?.['retry-after']);
+        if (!isNaN(ra)) err.retryAfterMs = ra * 1000;
+      } else if (status === 400 || status === 404) {
+        err.permanent = true;
+      }
+      throw err;
+    }
+  }
+
+  async resolveLabelId(folder) {
+    if (!this.labelIds) {
+      const res = await this.call(() => this.gmail.users.labels.list({ userId: 'me' }));
+      this.labelIds = new Map();
+      for (const l of res.data.labels || []) {
+        this.labelIds.set(l.id, l.id);
+        this.labelIds.set(l.name, l.id);
+      }
+    }
+    const id = this.labelIds.get(folder) || this.labelIds.get(String(folder).toUpperCase());
+    if (!id) {
+      const err = new Error(`Gmail label "${folder}" not found`);
+      err.permanent = true;
+      throw err;
+    }
+    return id;
+  }
+
+  async enumerate(folder, { limit, searchCriteria } = {}) {
+    const labelId = await this.resolveLabelId(folder);
+    const ids = [];
+    let pageToken;
+    do {
+      const res = await this.call(() => this.gmail.users.messages.list({
+        userId: 'me',
+        labelIds: [labelId],
+        maxResults: 500,
+        includeSpamTrash: true,
+        q: typeof searchCriteria === 'string' && searchCriteria ? searchCriteria : undefined,
+        pageToken,
+        fields: 'messages/id,nextPageToken',
+      }));
+      for (const m of res.data.messages || []) ids.push(m.id);
+      pageToken = res.data.nextPageToken;
+    } while (pageToken && !(limit > 0 && ids.length >= limit));
+    const selected = limit > 0 ? ids.slice(0, limit) : ids;
+    this.log('CLIENT', `Enumerated ${selected.length} messages in label ${folder} (${labelId})`);
+    return { key: labelId, refs: selected.map((id, i) => ({ key: id, uid: i + 1, serviceId: id })) };
+  }
+
+  async fetchBatch(_labelId, refs) {
+    const out = [];
+    for (const ref of refs) {
+      const res = await this.call(() => this.gmail.users.messages.get({
+        userId: 'me', id: ref.key, format: 'raw', fields: 'id,threadId,labelIds,internalDate,raw',
+      }));
+      out.push({
+        ref,
+        raw: Buffer.from(res.data.raw, 'base64url'),
+        meta: {
+          flags: res.data.labelIds || [],
+          internalDate: res.data.internalDate ? new Date(parseInt(res.data.internalDate, 10)).toISOString() : null,
+        },
+      });
+    }
+    return out;
   }
 
   parseHeaders(headerBlock) {

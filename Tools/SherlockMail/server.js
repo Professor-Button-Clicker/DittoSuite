@@ -3,7 +3,6 @@ import { dirname, join, isAbsolute, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync, mkdirSync } from 'fs';
 import { exec } from 'child_process';
-import apiRoutes from './src/api/routes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -50,6 +49,9 @@ const dataDir = process.env.SHERLOCKMAIL_DATA_DIR || join(__dirname, 'data');
 if (!existsSync(dataDir)) {
   mkdirSync(dataDir, { recursive: true });
 }
+
+// Loaded after --data-dir is applied: routes and services read SHERLOCKMAIL_DATA_DIR at module load.
+const { default: apiRoutes } = await import('./src/api/routes.js');
 
 const app = express();
 

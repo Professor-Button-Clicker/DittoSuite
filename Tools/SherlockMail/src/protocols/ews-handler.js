@@ -13,6 +13,7 @@ export class EwsHandler {
   }
 
   log(direction, message) {
+    if (this.protocolLog.length >= 5000) this.protocolLog.shift();
     this.protocolLog.push({
       timestamp: new Date().toISOString(),
       direction,
@@ -103,6 +104,10 @@ export class EwsHandler {
   async soapRequest(operation, body) {
     const envelope = this.buildSoapEnvelope(operation, body, this.config.impersonate);
 
+    if (this.config.tokenProvider) {
+      this.authHeaders = { Authorization: `Bearer ${await this.config.tokenProvider()}` };
+    }
+
     this.log('C→S', `SOAP ${operation} → ${this.ewsUrl}`);
 
     const res = await fetch(this.ewsUrl, {
@@ -116,13 +121,90 @@ export class EwsHandler {
 
     const text = await res.text();
 
-    if (!res.ok) {
+    if (!res.ok || /ResponseCode>ErrorServerBusy</.test(text)) {
       const faultMatch = text.match(/<faultstring>(.*?)<\/faultstring>/s);
-      throw new Error(faultMatch ? faultMatch[1] : `EWS request failed (${res.status})`);
+      const err = new Error(faultMatch ? faultMatch[1] : `EWS request failed (${res.status})`);
+      const backoff = text.match(/Name="BackOffMilliseconds">(\d+)</);
+      if (backoff) err.retryAfterMs = parseInt(backoff[1], 10);
+      else if (res.status === 400 || res.status === 403) err.permanent = true;
+      throw err;
     }
 
     this.log('S→C', `HTTP ${res.status} - ${operation} response received`);
     return text;
+  }
+
+  async resolveFolderRef(folder) {
+    if (!this.folderIds) {
+      this.folderIds = new Map();
+      for (const f of await this.listFolders()) {
+        if (!this.folderIds.has(f.path)) this.folderIds.set(f.path, f.ewsFolderId);
+      }
+    }
+    const id = this.folderIds.get(folder);
+    if (id) return `<t:FolderId Id="${this.escapeXml(id)}"/>`;
+    const wellKnown = this.mapWellKnownFolder(folder, null);
+    if (wellKnown) return `<t:DistinguishedFolderId Id="${wellKnown}"/>`;
+    if (/^[A-Za-z0-9+/=_-]{40,}$/.test(folder)) return `<t:FolderId Id="${this.escapeXml(folder)}"/>`;
+    const err = new Error(`EWS folder "${folder}" not found`);
+    err.permanent = true;
+    throw err;
+  }
+
+  async enumerate(folder, { limit } = {}) {
+    const folderRef = await this.resolveFolderRef(folder);
+    const pageSize = 1000;
+    const refs = [];
+    for (let offset = 0; ; ) {
+      const xml = await this.soapRequest('FindItem', `<m:FindItem Traversal="Shallow">
+        <m:ItemShape><t:BaseShape>IdOnly</t:BaseShape></m:ItemShape>
+        <m:IndexedPageItemView MaxEntriesReturned="${pageSize}" Offset="${offset}" BasePoint="Beginning"/>
+        <m:ParentFolderIds>${folderRef}</m:ParentFolderIds>
+      </m:FindItem>`);
+      let count = 0;
+      for (const m of xml.matchAll(/<t:ItemId\b([^>]*)\/>/g)) {
+        const id = m[1].match(/\bId="([^"]+)"/)?.[1];
+        if (!id) continue;
+        refs.push({ key: id, uid: refs.length + 1, serviceId: id, changeKey: m[1].match(/\bChangeKey="([^"]+)"/)?.[1] || '' });
+        count++;
+      }
+      offset += count;
+      if (count === 0 || xml.includes('IncludesLastItemInRange="true"') || (limit > 0 && refs.length >= limit)) break;
+    }
+    const selected = limit > 0 ? refs.slice(0, limit) : refs;
+    this.log('CLIENT', `Enumerated ${selected.length} items in ${folder}`);
+    return { key: folder, refs: selected };
+  }
+
+  async fetchBatch(_folder, refs) {
+    const ids = refs.map(r => `<t:ItemId Id="${this.escapeXml(r.key)}"/>`).join('');
+    const xml = await this.soapRequest('GetItem', `<m:GetItem>
+      <m:ItemShape><t:BaseShape>IdOnly</t:BaseShape><t:IncludeMimeContent>true</t:IncludeMimeContent></m:ItemShape>
+      <m:ItemIds>${ids}</m:ItemIds>
+    </m:GetItem>`);
+
+    const responses = xml.split('<m:GetItemResponseMessage').slice(1);
+    const out = [];
+    let firstError = null;
+    responses.forEach((block, i) => {
+      const ref = refs[i];
+      if (!ref) return;
+      if (!/^\s*ResponseClass="Success"/.test(block)) {
+        firstError = firstError || block.match(/<m:ResponseCode>([^<]+)</)?.[1] || 'EWS item error';
+        return;
+      }
+      const open = block.indexOf('<t:MimeContent');
+      if (open < 0) return;
+      const start = block.indexOf('>', open) + 1;
+      const end = block.indexOf('</t:MimeContent>', start);
+      out.push({ ref, raw: Buffer.from(block.slice(start, end), 'base64'), meta: { flags: [] } });
+    });
+    if (out.length === 0 && refs.length === 1 && firstError) {
+      const err = new Error(firstError);
+      if (firstError === 'ErrorItemNotFound') err.permanent = true;
+      throw err;
+    }
+    return out;
   }
 
   async connect() {
@@ -157,25 +239,32 @@ export class EwsHandler {
   async listFolders() {
     this.log('C→S', 'SOAP FindFolder - Traversal: Deep');
 
-    const body = `<m:FindFolder Traversal="Deep">
-      <m:FolderShape>
-        <t:BaseShape>Default</t:BaseShape>
-        <t:AdditionalProperties>
-          <t:FieldURI FieldURI="folder:FolderClass"/>
-          <t:FieldURI FieldURI="folder:TotalCount"/>
-          <t:FieldURI FieldURI="folder:UnreadCount"/>
-          <t:FieldURI FieldURI="folder:DisplayName"/>
-          <t:FieldURI FieldURI="folder:ParentFolderId"/>
-        </t:AdditionalProperties>
-      </m:FolderShape>
-      <m:IndexedPageFolderView MaxEntriesReturned="200" Offset="0" BasePoint="Beginning"/>
-      <m:ParentFolderIds>
-        <t:DistinguishedFolderId Id="msgfolderroot"/>
-      </m:ParentFolderIds>
-    </m:FindFolder>`;
+    const folders = [];
+    for (let offset = 0; ; ) {
+      const body = `<m:FindFolder Traversal="Deep">
+        <m:FolderShape>
+          <t:BaseShape>Default</t:BaseShape>
+          <t:AdditionalProperties>
+            <t:FieldURI FieldURI="folder:FolderClass"/>
+            <t:FieldURI FieldURI="folder:TotalCount"/>
+            <t:FieldURI FieldURI="folder:UnreadCount"/>
+            <t:FieldURI FieldURI="folder:DisplayName"/>
+            <t:FieldURI FieldURI="folder:ParentFolderId"/>
+          </t:AdditionalProperties>
+        </m:FolderShape>
+        <m:IndexedPageFolderView MaxEntriesReturned="500" Offset="${offset}" BasePoint="Beginning"/>
+        <m:ParentFolderIds>
+          <t:DistinguishedFolderId Id="msgfolderroot"/>
+        </m:ParentFolderIds>
+      </m:FindFolder>`;
 
-    const xml = await this.soapRequest('FindFolder', body);
-    const folders = this.parseFolders(xml);
+      const xml = await this.soapRequest('FindFolder', body);
+      const page = this.parseFolders(xml);
+      folders.push(...page);
+      const returned = (xml.match(/<t:FolderId\b/g) || []).length;
+      offset += returned;
+      if (returned === 0 || xml.includes('IncludesLastItemInRange="true"')) break;
+    }
 
     this.log('S→C', `FindFolder returned ${folders.length} folders`);
     return folders;
@@ -441,7 +530,7 @@ export class EwsHandler {
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  mapWellKnownFolder(folderPath) {
+  mapWellKnownFolder(folderPath, fallback = 'inbox') {
     const map = {
       'inbox': 'inbox', 'Inbox': 'inbox',
       'sent items': 'sentitems', 'Sent Items': 'sentitems', 'Sent': 'sentitems',
@@ -452,7 +541,7 @@ export class EwsHandler {
       'outbox': 'outbox', 'Outbox': 'outbox',
       'recoverable items': 'recoverableitemsroot', 'Recoverable Items': 'recoverableitemsroot',
     };
-    return map[folderPath] || 'inbox';
+    return map[folderPath] || fallback;
   }
 
   async disconnect() {

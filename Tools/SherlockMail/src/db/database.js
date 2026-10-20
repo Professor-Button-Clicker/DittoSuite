@@ -21,6 +21,7 @@ export function getDb() {
     const dbPath = join(dataDir, 'fmc.sqlite');
     db = new DatabaseSync(dbPath);
     db.exec('PRAGMA journal_mode = WAL');
+    db.exec('PRAGMA synchronous = NORMAL');
     db.exec('PRAGMA foreign_keys = ON');
     initSchema();
   }
@@ -59,6 +60,7 @@ function migrate() {
   addCol('projects', 'client_matter_no', 'TEXT');
   addCol('acquisitions', 'completion_type', 'TEXT');
   addCol('acquisitions', 'session_dir', 'TEXT');
+  addCol('messages', 'internal_date', 'TEXT');
 }
 
 function rowToObj(row, columns) {
@@ -243,11 +245,19 @@ export function createAcquisition(projectId, foldersJson) {
   return id;
 }
 
+const stmtCache = new Map();
+function cachedStmt(sql) {
+  let s = stmtCache.get(sql);
+  if (!s) { s = getDb().prepare(sql); stmtCache.set(sql, s); }
+  return s;
+}
+
+const SAVE_MESSAGE_SQL = `INSERT OR REPLACE INTO messages (id, acquisition_id, project_id, uid, service_id, folder, subject, from_address, to_addresses, cc_addresses, bcc_addresses, date, message_id, in_reply_to, size, flags, has_attachments, attachment_count, content_type, hash_md5, hash_sha256, hash_sha512, eml_path, acquired_at, headers_json, is_encrypted, is_signed, body_text, body_html, internal_date)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
 export function saveMessage(msg) {
-  const d = getDb();
   const id = msg.id || uuidv4();
-  d.prepare(`INSERT OR REPLACE INTO messages (id, acquisition_id, project_id, uid, service_id, folder, subject, from_address, to_addresses, cc_addresses, bcc_addresses, date, message_id, in_reply_to, size, flags, has_attachments, attachment_count, content_type, hash_md5, hash_sha256, hash_sha512, eml_path, acquired_at, headers_json, is_encrypted, is_signed, body_text, body_html)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+  cachedStmt(SAVE_MESSAGE_SQL).run(
     id, msg.acquisitionId, msg.projectId, msg.uid || null, msg.serviceId || null,
     msg.folder, msg.subject, msg.fromAddress, JSON.stringify(msg.toAddresses || []),
     JSON.stringify(msg.ccAddresses || []), JSON.stringify(msg.bccAddresses || []),
@@ -256,9 +266,29 @@ export function saveMessage(msg) {
     msg.contentType || 'text/plain', msg.hashMd5 || null, msg.hashSha256 || null,
     msg.hashSha512 || null, msg.emlPath || null, new Date().toISOString(),
     JSON.stringify(msg.headers || {}), msg.isEncrypted ? 1 : 0, msg.isSigned ? 1 : 0,
-    msg.bodyText || null, msg.bodyHtml || null
+    msg.bodyText || null, msg.bodyHtml || null, msg.internalDate || null
   );
   return id;
+}
+
+// One transaction per batch: per-row autocommit costs a WAL sync for every message.
+export function saveMessagesBatch(msgs) {
+  const d = getDb();
+  d.exec('BEGIN');
+  try {
+    for (const msg of msgs) {
+      saveMessage(msg);
+      for (const att of msg.attachments || []) saveAttachment({ ...att, messageId: msg.id });
+    }
+    d.exec('COMMIT');
+  } catch (err) {
+    d.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+export function getProjectMessageKeys(projectId) {
+  return getDb().prepare('SELECT message_id, hash_sha256 FROM messages WHERE project_id = ?').all(projectId);
 }
 
 export function getMessages(projectId, { folder, limit, offset, search } = {}) {
@@ -355,8 +385,7 @@ export function getAcquisitions(projectId) {
 }
 
 export function saveAttachment(att) {
-  const d = getDb();
-  d.prepare(`INSERT OR REPLACE INTO attachments (id, message_id, filename, content_type, size, hash_md5, hash_sha256, disposition, content_id, is_inline, local_path)
+  cachedStmt(`INSERT OR REPLACE INTO attachments (id, message_id, filename, content_type, size, hash_md5, hash_sha256, disposition, content_id, is_inline, local_path)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     att.id, att.messageId, att.filename, att.contentType, att.size,
     att.hashMd5, att.hashSha256, att.disposition, att.contentId,
