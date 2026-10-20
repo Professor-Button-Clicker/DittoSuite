@@ -1078,9 +1078,32 @@ function renderQCResults(results, containerId) {
         </div>
         <div class="qc-detail">${check.status.toUpperCase()}</div>
       </div>`;
+    const flagged = check.mismatches || check.unverifiable;
+    if (flagged?.length) html += renderQCFlaggedMessages(flagged);
   }
 
   el.innerHTML = html;
+}
+
+function renderQCFlaggedMessages(rows) {
+  const fmt = v => v ? esc(new Date(v).toLocaleString()) : '<span style="color:var(--text-muted)">none</span>';
+  return `
+    <details style="margin:-4px 0 12px 40px;font-size:12px">
+      <summary style="cursor:pointer;color:var(--text-secondary)">Show ${rows.length} affected message(s)</summary>
+      <table style="width:100%;border-collapse:collapse;margin-top:8px">
+        <tr style="color:var(--text-muted);text-align:left">
+          <th style="padding:4px">Message</th><th style="padding:4px">Date header in email</th>
+          <th style="padding:4px">Recorded at collection</th><th style="padding:4px">Problem</th>
+        </tr>
+        ${rows.map(r => `
+          <tr style="border-top:1px solid var(--border)">
+            <td style="padding:4px">${esc(r.folder || '')} #${esc(String(r.uid ?? ''))} ${esc(r.subject || '')}</td>
+            <td style="padding:4px;font-family:var(--font-mono)">${fmt(r.emailDateHeader)}</td>
+            <td style="padding:4px;font-family:var(--font-mono)">${fmt(r.recordedValue || r.recordedHeaderDate || r.recordedDate)}</td>
+            <td style="padding:4px;color:var(--danger)">${esc(r.problem || '')}</td>
+          </tr>`).join('')}
+      </table>
+    </details>`;
 }
 
 // ============================================================
@@ -2546,19 +2569,9 @@ async function wizRunQC() {
   statusEl.innerHTML = '<span style="color:var(--accent)">Running QC checks...</span>';
 
   try {
-    const results = await api(`/projects/${currentProject.id}/qc`, { method: 'POST' });
+    const results = await api(`/projects/${currentProject.id}/qc`, { method: 'POST', body: { scope: 'collection' } });
     statusEl.innerHTML = '';
-    const excludeFromCollectQC = ['Export Completeness', 'Audit Trail', 'DFIR Standards Compliance'];
-    const filtered = {
-      ...results,
-      checks: (results.checks || []).filter(c => !excludeFromCollectQC.includes(c.name)),
-    };
-    filtered.summary = {
-      passed: filtered.checks.filter(c => c.status === 'pass').length,
-      warnings: filtered.checks.filter(c => c.status === 'warning').length,
-      failed: filtered.checks.filter(c => c.status === 'fail').length,
-    };
-    renderQCResults(filtered, 'wiz-qc-results');
+    renderQCResults(results, 'wiz-qc-results');
   } catch (err) {
     statusEl.innerHTML = `<span class="verify-fail">QC failed: ${esc(err.message || 'Unknown error')}</span>`;
   }

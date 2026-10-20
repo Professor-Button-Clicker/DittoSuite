@@ -1351,27 +1351,32 @@ router.post('/projects/:id/search', async (req, res) => {
 });
 
 // ── Quality Control ──
-router.post('/projects/:id/qc', (req, res) => {
+router.post('/projects/:id/qc', async (req, res) => {
   const project = getProject(req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  const messages = getAllProjectMessages(project.id);
-  const acquisitions = getAcquisitions(project.id);
-  const folders = getFolders(project.id);
-  const exports = getExportRecords(project.id);
-  const attachments = getProjectAttachments(project.id);
-  const timestamps = getTimestampRecords(project.id);
-  const driveLinks = getDriveLinks(project.id);
+  try {
+    const messages = getAllProjectMessages(project.id);
+    const acquisitions = getAcquisitions(project.id);
+    const folders = getFolders(project.id);
+    const exports = getExportRecords(project.id);
+    const attachments = getProjectAttachments(project.id);
+    const driveLinks = getDriveLinks(project.id);
+    const scope = req.body?.scope === 'collection' ? 'collection' : 'full';
 
-  const results = QualityControlService.runChecks(project, messages, acquisitions, folders, exports, { attachments, timestamps, driveLinks });
-  saveQcResult(project.id, results);
+    const results = await QualityControlService.runChecks(project, messages, acquisitions, folders, exports, { attachments, driveLinks, scope });
+    saveQcResult(project.id, results);
 
-  addAuditEntry(project.id, 'QC_COMPLETED', `Quality control: ${results.summary.passed} passed, ${results.summary.warnings} warnings, ${results.summary.failed} failed`, {
-    summary: results.summary,
-    overallStatus: results.overallStatus,
-  }, project.examiner_name);
+    addAuditEntry(project.id, 'QC_COMPLETED', `Quality control (${scope}): ${results.summary.passed} passed, ${results.summary.warnings} warnings, ${results.summary.failed} failed`, {
+      scope,
+      summary: results.summary,
+      overallStatus: results.overallStatus,
+    }, project.examiner_name);
 
-  res.json(results);
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.get('/projects/:id/qc', (req, res) => {

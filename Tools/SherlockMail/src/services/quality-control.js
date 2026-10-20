@@ -1,28 +1,102 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import { simpleParser } from 'mailparser';
+
+const TIMESTAMP_CHECK_CONCURRENCY = 32;
+const HEADER_READ_BYTES = 256 * 1024;
+const HEADER_PARSER_OPTIONS = { skipHtmlToText: true, skipTextToHtml: true, skipTextLinks: true, skipImageLinks: true };
+
+// Checks that belong to export/case review rather than to verifying a collection.
+const NOT_IN_COLLECTION_SCOPE = new Set(['Duplicate Detection', 'Export Completeness', 'Audit Trail', 'DFIR Standards Compliance']);
+
+function isoOrNull(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+async function readHeaderBlock(filePath) {
+  const fh = await fs.promises.open(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(HEADER_READ_BYTES);
+    const { bytesRead } = await fh.read(buf, 0, HEADER_READ_BYTES, 0);
+    const data = buf.subarray(0, bytesRead);
+    const ends = [data.indexOf('\r\n\r\n'), data.indexOf('\n\n')].filter(i => i >= 0);
+    return ends.length ? data.subarray(0, Math.min(...ends)) : data;
+  } finally {
+    await fh.close();
+  }
+}
+
+async function verifyMessageTimestamps(m) {
+  const recordedDate = isoOrNull(m.date);
+  let recordedHeaderDate = null;
+  try { recordedHeaderDate = isoOrNull(JSON.parse(m.headers_json || '{}').date); } catch {}
+  const recordedServerDate = isoOrNull(m.internal_date);
+  const report = { subject: m.subject, folder: m.folder, uid: m.uid, file: m.eml_path, recordedDate, recordedHeaderDate };
+
+  if (!m.eml_path || !fs.existsSync(m.eml_path)) {
+    return { status: 'missing_file', report: { ...report, problem: 'Collected email file not found' } };
+  }
+
+  let emailDate = null;
+  try {
+    const header = await readHeaderBlock(m.eml_path);
+    const parsed = await simpleParser(Buffer.concat([header, Buffer.from('\r\n\r\n')]), HEADER_PARSER_OPTIONS);
+    emailDate = isoOrNull(parsed.date);
+  } catch {
+    // An unreadable header is treated like a missing Date header below.
+  }
+  report.emailDateHeader = emailDate;
+
+  if (emailDate) {
+    const differs = [];
+    let recordedValue = null;
+    if (recordedHeaderDate && recordedHeaderDate !== emailDate) { differs.push('the Date header recorded at collection'); recordedValue = recordedHeaderDate; }
+    if (recordedDate && recordedDate !== emailDate) { differs.push('the message date recorded at collection'); recordedValue = recordedValue || recordedDate; }
+    if (!recordedHeaderDate && !recordedDate) differs.push('a missing recorded date');
+    return differs.length
+      ? { status: 'mismatch', report: { ...report, recordedValue, problem: `Date header in the collected email differs from ${differs.join(' and ')}` } }
+      : { status: 'match', report };
+  }
+  if (recordedHeaderDate) {
+    return { status: 'mismatch', report: { ...report, problem: 'The Date header recorded at collection is no longer in the collected email' } };
+  }
+  if (recordedServerDate && recordedDate) {
+    return recordedServerDate === recordedDate
+      ? { status: 'match_server_date', report }
+      : { status: 'mismatch', report: { ...report, recordedValue: recordedDate, recordedServerDate, problem: 'Recorded message date differs from the server date recorded at collection' } };
+  }
+  return { status: 'unverifiable', report: { ...report, problem: 'No Date header and no server date recorded' } };
+}
 
 export class QualityControlService {
 
-  static runChecks(project, messages, acquisitions, folders, exports, options = {}) {
+  // scope 'collection' limits the run to checks that verify the collection itself.
+  static async runChecks(project, messages, acquisitions, folders, exports, options = {}) {
     const startTime = Date.now();
+    const all = [
+      ['Collection Completeness', () => this.checkCollectionCompleteness(messages, acquisitions, folders)],
+      ['Hash Integrity', () => this.checkHashIntegrity(messages)],
+      ['Duplicate Detection', () => this.checkDuplicates(messages)],
+      ['Date Consistency', () => this.checkDateConsistency(messages)],
+      ['Required Fields', () => this.checkMissingFields(messages)],
+      ['Folder Coverage', () => this.checkFolderCoverage(messages, folders)],
+      ['Export Completeness', () => this.checkExportCompleteness(messages, exports)],
+      ['Audit Trail', () => this.checkAuditTrail(project)],
+      ['Encryption & Signing Detection', () => this.checkEncryptionDetection(messages)],
+      ['Write Protection (ISO 27037)', () => this.checkWriteProtection(project)],
+      ['DFIR Standards Compliance', () => this.checkStandardsCompliance(project, messages, acquisitions)],
+      ['Attachment Completeness', () => this.checkAttachmentCompleteness(messages, options.attachments || [])],
+      ['Timestamp Verification', () => this.checkTimestampVerification(messages)],
+      ['Protocol Log Completeness', () => this.checkProtocolLogCompleteness(acquisitions)],
+      ['Cloud Attachment Coverage', () => this.checkCloudAttachmentCoverage(messages, options.driveLinks || [])],
+      ['Export Integrity', () => this.checkExportIntegrity(exports)],
+      ['Collection Resumability', () => this.checkCollectionResumability(acquisitions)],
+    ];
+    const selected = options.scope === 'collection' ? all.filter(([name]) => !NOT_IN_COLLECTION_SCOPE.has(name)) : all;
     const checks = [];
-
-    checks.push(this.checkCollectionCompleteness(messages, acquisitions, folders));
-    checks.push(this.checkHashIntegrity(messages));
-    checks.push(this.checkDuplicates(messages));
-    checks.push(this.checkDateConsistency(messages));
-    checks.push(this.checkMissingFields(messages));
-    checks.push(this.checkFolderCoverage(messages, folders));
-    checks.push(this.checkExportCompleteness(messages, exports));
-    checks.push(this.checkAuditTrail(project));
-    checks.push(this.checkEncryptionDetection(messages));
-    checks.push(this.checkWriteProtection(project));
-    checks.push(this.checkStandardsCompliance(project, messages, acquisitions));
-    checks.push(this.checkAttachmentCompleteness(messages, options.attachments || []));
-    checks.push(this.checkTimestampVerification(options.timestamps || []));
-    checks.push(this.checkProtocolLogCompleteness(acquisitions));
-    checks.push(this.checkCloudAttachmentCoverage(messages, options.driveLinks || []));
-    checks.push(this.checkExportIntegrity(exports));
-    checks.push(this.checkCollectionResumability(acquisitions));
+    for (const [, run] of selected) checks.push(await run());
 
     const elapsed = Date.now() - startTime;
     const passed = checks.filter(c => c.status === 'pass').length;
@@ -33,6 +107,7 @@ export class QualityControlService {
       timestamp: new Date().toISOString(),
       projectId: project.id,
       projectName: project.name,
+      scope: options.scope === 'collection' ? 'collection' : 'full',
       elapsed,
       summary: { total: checks.length, passed, warnings, failed },
       overallStatus: failed > 0 ? 'fail' : warnings > 0 ? 'warning' : 'pass',
@@ -341,34 +416,49 @@ export class QualityControlService {
     return check;
   }
 
-  static checkTimestampVerification(timestamps) {
+  // Compares each collected email's own Date header (re-read from the collected EML file and parsed
+  // exactly as collection parsed it) with the timestamps recorded at collection. Any difference means
+  // either the evidence file or the recorded metadata was edited after collection.
+  static async checkTimestampVerification(messages) {
     const check = { name: 'Timestamp Verification', category: 'forensic' };
-
-    if (!timestamps || timestamps.length === 0) {
-      return { ...check, status: 'warning', detail: 'No timestamps recorded — forensic timeline cannot be verified', metrics: { count: 0 } };
+    if (messages.length === 0) {
+      return { ...check, status: 'warning', detail: 'No messages to verify', metrics: { total: 0 } };
     }
 
-    let collectionTs = 0;
-    let exportTs = 0;
-    let internalOnly = 0;
-
-    for (const ts of timestamps) {
-      const data = typeof ts.timestamp_data === 'string' ? JSON.parse(ts.timestamp_data) : ts.timestamp_data;
-      if (ts.type === 'collection') collectionTs++;
-      if (ts.type === 'export') exportTs++;
-      if (data?.tsa?.name === 'SherlockMail Internal TSA') internalOnly++;
+    const results = [];
+    for (let i = 0; i < messages.length; i += TIMESTAMP_CHECK_CONCURRENCY) {
+      const slice = messages.slice(i, i + TIMESTAMP_CHECK_CONCURRENCY);
+      results.push(...await Promise.all(slice.map(m => verifyMessageTimestamps(m))));
     }
 
-    check.metrics = { total: timestamps.length, collection: collectionTs, export: exportTs, internalOnly };
+    const count = s => results.filter(r => r.status === s).length;
+    const mismatched = results.filter(r => r.status === 'mismatch');
+    const missing = results.filter(r => r.status === 'missing_file');
+    const unverifiable = results.filter(r => r.status === 'unverifiable');
+    check.metrics = {
+      total: messages.length,
+      matched: count('match'),
+      matchedServerDate: count('match_server_date'),
+      mismatched: mismatched.length,
+      missingFiles: missing.length,
+      unverifiable: unverifiable.length,
+    };
+    const verified = check.metrics.matched + check.metrics.matchedServerDate;
 
-    if (collectionTs > 0 && exportTs > 0) {
-      check.status = internalOnly === timestamps.length ? 'warning' : 'pass';
-      check.detail = internalOnly === timestamps.length
-        ? `${timestamps.length} timestamps present but all are internal — use a production TSA for evidentiary weight`
-        : `${timestamps.length} timestamps verified (${collectionTs} collection, ${exportTs} export)`;
-    } else {
+    if (mismatched.length || missing.length) {
+      check.status = 'fail';
+      const parts = [];
+      if (mismatched.length) parts.push(`${mismatched.length} message(s) whose timestamps no longer match what was recorded at collection`);
+      if (missing.length) parts.push(`${missing.length} collected file(s) missing, so their timestamps cannot be checked`);
+      check.detail = `${parts.join('; ')}. ${verified} of ${messages.length} verified.`;
+      check.mismatches = [...mismatched, ...missing].slice(0, 25).map(r => r.report);
+    } else if (unverifiable.length) {
       check.status = 'warning';
-      check.detail = `Incomplete timestamps: ${collectionTs} collection, ${exportTs} export — both are needed for chain of custody`;
+      check.detail = `${verified} of ${messages.length} message timestamps match the collected emails; ${unverifiable.length} have no Date header or recorded server date to compare`;
+      check.unverifiable = unverifiable.slice(0, 25).map(r => r.report);
+    } else {
+      check.status = 'pass';
+      check.detail = `All ${messages.length} message timestamps match the collected emails' Date headers — no changes since collection`;
     }
     return check;
   }
