@@ -7,9 +7,9 @@ import { URL } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BUNDLED_DIR = path.join(__dirname, '..', '..', 'data');
-const CONFIG_DIR = process.env.SHERLOCKMAIL_DATA_DIR || BUNDLED_DIR;
-const TOKENS_PATH = path.join(CONFIG_DIR, 'google-tokens.json');
-const CREDENTIALS_PATH = path.join(CONFIG_DIR, 'google-credentials.json');
+function getConfigDir() { return process.env.SHERLOCKMAIL_DATA_DIR || BUNDLED_DIR; }
+function getTokensPath() { return path.join(getConfigDir(), 'google-tokens.json'); }
+function getCredentialsPath() { return path.join(getConfigDir(), 'google-credentials.json'); }
 
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
@@ -21,20 +21,21 @@ let callbackServer = null;
 let pendingAuthResolve = null;
 
 function ensureDataDir() {
-  if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  const dir = getConfigDir();
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
 export function loadCredentials() {
-  if (fs.existsSync(CREDENTIALS_PATH)) {
-    const raw = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, 'utf8'));
+  if (fs.existsSync(getCredentialsPath())) {
+    const raw = JSON.parse(fs.readFileSync(getCredentialsPath(), 'utf8'));
     const creds = raw.installed || raw.web;
     return creds;
   }
   const bundledPath = path.join(BUNDLED_DIR, 'google-credentials.json');
-  if (bundledPath !== CREDENTIALS_PATH && fs.existsSync(bundledPath)) {
+  if (bundledPath !== getCredentialsPath() && fs.existsSync(bundledPath)) {
     const raw = JSON.parse(fs.readFileSync(bundledPath, 'utf8'));
     ensureDataDir();
-    fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(raw, null, 2));
+    fs.writeFileSync(getCredentialsPath(), JSON.stringify(raw, null, 2));
     return raw.installed || raw.web;
   }
   return null;
@@ -42,7 +43,7 @@ export function loadCredentials() {
 
 export function saveCredentials(credentialsJson) {
   ensureDataDir();
-  fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(credentialsJson, null, 2));
+  fs.writeFileSync(getCredentialsPath(), JSON.stringify(credentialsJson, null, 2));
 }
 
 export function getOAuth2Client() {
@@ -70,15 +71,15 @@ export function getOAuth2Client() {
 }
 
 function loadTokens() {
-  if (fs.existsSync(TOKENS_PATH)) {
-    return JSON.parse(fs.readFileSync(TOKENS_PATH, 'utf8'));
+  if (fs.existsSync(getTokensPath())) {
+    return JSON.parse(fs.readFileSync(getTokensPath(), 'utf8'));
   }
   return null;
 }
 
 function saveTokens(tokens) {
   ensureDataDir();
-  fs.writeFileSync(TOKENS_PATH, JSON.stringify(tokens, null, 2));
+  fs.writeFileSync(getTokensPath(), JSON.stringify(tokens, null, 2));
 }
 
 export function getAuthUrl() {
@@ -197,7 +198,7 @@ export function stopCallbackServer() {
 }
 
 export function revokeTokens() {
-  if (fs.existsSync(TOKENS_PATH)) fs.unlinkSync(TOKENS_PATH);
+  if (fs.existsSync(getTokensPath())) fs.unlinkSync(getTokensPath());
   if (oAuth2Client) {
     oAuth2Client.revokeCredentials().catch(() => {});
     oAuth2Client = null;
